@@ -32,24 +32,33 @@ BIG=$(find "$S" -type f -size +99M -not -path '*/.git/*' | head -3)
 if [ -n "$BIG" ]; then echo "FATAL: oversized files would be rejected by GitHub:"; echo "$BIG"; exit 1; fi
 echo "OK"
 
-echo "[3/6] create private repo $LOGIN/$REPO_NAME..."
-STATUS=$(curl -sS -o /tmp/gh-create.json -w "%{http_code}" "${H[@]}" -X POST "$API/user/repos" \
-  -d "{\"name\":\"$REPO_NAME\",\"private\":true,\"description\":\"AI Studio full backup: code + plaintext keys + models + data\",\"has_wiki\":false,\"has_issues\":false}")
-if [ "$STATUS" = "201" ]; then
-  echo "created (private)"
-elif [ "$STATUS" = "422" ]; then
-  echo "already exists — using it"
-else
-  echo "FATAL: create failed HTTP $STATUS: $(head -c 300 /tmp/gh-create.json)"
-  echo "HINT: fine-grained PATs cannot create repos. Create the repo manually (Private) then re-run, or use a classic PAT with repo scope."
-  exit 1
-fi
-
-REPO="$LOGIN/$REPO_NAME"
+# REPO_NAME may be "name" or "owner/name". The create API takes a BARE
+# name — passing "owner/name" made GitHub sanitize it into a WRONG junk
+# repo ("elazem26-ai-studio", seen 2026-10-29). Strip the prefix first,
+# and skip the create call entirely when the repo already exists.
+CREATE_NAME="$REPO_NAME"
+case "$REPO_NAME" in */*) CREATE_NAME="${REPO_NAME##*/}" ;; esac
+REPO="$LOGIN/$CREATE_NAME"
 case "$REPO_NAME" in
   */*) REPO="$REPO_NAME" ;;  # owner/repo given explicitly
-  *)   REPO="$LOGIN/$REPO_NAME" ;;
 esac
+echo "[3/6] ensure private repo $REPO..."
+EXIST=$(curl -sS -o /dev/null -w "%{http_code}" "${H[@]}" "$API/repos/$REPO")
+if [ "$EXIST" = "200" ]; then
+  echo "already exists — using it"
+else
+  STATUS=$(curl -sS -o /tmp/gh-create.json -w "%{http_code}" "${H[@]}" -X POST "$API/user/repos" \
+    -d "{\"name\":\"$CREATE_NAME\",\"private\":true,\"description\":\"AI Studio full backup: code + plaintext keys + models + data\",\"has_wiki\":false,\"has_issues\":false}")
+  if [ "$STATUS" = "201" ]; then
+    echo "created (private)"
+  elif [ "$STATUS" = "422" ]; then
+    echo "already exists — using it"
+  else
+    echo "FATAL: create failed HTTP $STATUS: $(head -c 300 /tmp/gh-create.json)"
+    echo "HINT: fine-grained PATs cannot create repos. Create the repo manually (Private) then re-run, or use a classic PAT with repo scope."
+    exit 1
+  fi
+fi
 
 echo "[4/6] update .env with GitHub config (plaintext, per owner request)..."
 add_env() {

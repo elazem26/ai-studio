@@ -40,6 +40,7 @@ RsyncExcludes=(
   --exclude 'download'
   --exclude 'data/uploads' --exclude 'data/results' --exclude 'data/temp' --exclude 'data/sessions'
   --exclude 'extracted' --exclude 'tool-results' --exclude '.restore-check'
+  --exclude 'upload'
   --exclude 'mini-services/face-swap-pro/models'
   --exclude '__pycache__' --exclude '*.pyc' --exclude '*.log'
   --exclude 'tsconfig.tsbuildinfo' --exclude '.DS_Store'

@@ -466,3 +466,49 @@ Work Log:
 
 Stage Summary:
 - الجهاز 2vCPU/4GB: خدمة الوجه 1.5GB + خادم 0.5GB — أي نسخ احتياطي يمر الآن عبر حارس الذاكرة والقفل، والشجرة خارج نطاق المراقبة → استقرار كامل
+
+---
+Task ID: end-session-pipeline-v3
+Agent: main (Z.ai)
+Task: بروتوكول نهاية الجلسة حسب مواصفة المالك 2026-10-29
+
+Work Log:
+- junk-clean جديد: حذف extracted/ tool-results/ .backups download/backups + النسخ المؤرخة القديمة (إبقاء latest + 2) + حذف النسخة الثقيلة القديمة ai-studio-full-backup.bundle (873MB)
+- تنظيف الوسائط قبل أي نسخ: 67 مرفوعاً + 214 نتيجة + 12 مؤقت + 20 فيديو (118MB)
+- مواقع النسخ الجديدة: 5 خارج المشروع (/tmp و/var/tmp و/home/z/backups و/home/z/.ai-studio-backups و/home/z/Downloads) + 1 داخله (data/backups) — كل موقع latest + مؤرخ
+- حزمة كمبيوتر كاملة AI-Studio-PC-Complete.tar.gz (769MB): أكواد + db + .env + نماذج الوجه + start.sh + README-RUN.md + .env.example
+- GitHub نسخة نظيفة (v3 staging): بدون صور/فيديو/نماذج/مكررات — staging 59MB فقط، commit 96bea05، bundle نظيف 34MB
+- خفض حارس ذاكرة السلسلة إلى 400MB (النسخة النظيفة صغيرة) بعد أن كان 700MB لنسخة الـ900MB
+- اختبار كامل: dryRun ثم تشغيل حقيقي ناجح (38 ثانية)، الرفع توقف فقط عند توكن منتهي (401) — ينتظر توكن جديد من /llm-keys
+- التحقق: sendBeacon عند إغلاق التبويب يصادق عبر كوكي authToken (الـ401 القديم سببه انهيار DB في جلسة سابقة)
+
+Stage Summary:
+- زر إنهاء الجلسة + إغلاق التبويب + الانقطاع → تنظيف كامل ثم 6 نسخ + حزمة PC + رفع GitHub نظيف
+- كل ما تبقى للمالك: إدخال GITHUB_TOKEN جديد من /llm-keys
+
+---
+Task ID: studio-multi-result-boxed-swap
+Agent: main (Z.ai)
+Task: استعادة عدد النتائج المتعددة في وضع المربعات المرقمة
+
+Work Log:
+- التشخيص: المسار العادي كان يرسل numResults إلى /api/tryon/generate، لكن runBoxedSwap (وضع الربط المعقد) يستدعي /api/images/garment-swap بدون numResults → نتيجة واحدة دائماً
+- الإصلاح API: parseSwapParams يقبل numResults (1|2|4|8) + حلقة تكرار runSwapPipeline N مرة في المهمة الخلفية، مع تدرج النسبة داخل شرائح (النتيجة 1/2، 2/2) وfinishSwapJob يستقبل مصفوفة results
+- الإصلاح UI: runBoxedSwap يرسل getEffectiveSettings(settings).numResults + يعرض job.results كلها في setResults (توافق خلفي مع result المفردة)
+- اختبار حقيقي: مهمة واحدة numResults=2 بصور مستخدم حقيقية → نتيجتان مختلفتان (md5 مختلف) في 100 ثانية، النسبة 11%→20% ثم 56%→70% ثم 100%
+- تبديل الوجه لا يملك إعداد عدد نتائج أصلاً — لا تغيير مطلوب
+- ملاحظة: انهيار API مؤقت (500 جماعي) بعد التعديلات حل بإعادة تشغيل dev — حالة HMR عابرة
+
+Stage Summary:
+- إعداد "عدد النتائج" يعمل الآن في كلا المسارين: العادي والمربعات المرقمة
+
+## 2026-10-29 — Session-End System: disconnect detection + fixes
+- Fixed build error: installed missing `openai` + `replicate` packages (src/lib/ai/providers/*)
+- Added HEARTBEAT disconnect detection (owner spec "عند الانقطاع"):
+  - `src/app/api/system/heartbeat/route.ts` — POST beat every 60s from client; gap > 4min = interrupted session → spawns full protocol detached
+  - `scripts/end-session-protocol.ts` — standalone bun runner (junk-clean → media-clean → 6 backups → download-ready → PC-package → GitHub)
+  - `session-cleanup.tsx` — added heartbeat loop (60s interval, sendBeacon)
+- Verified end-to-end: simulated 10-min gap → auto-protocol ran → 6/6 backups + PC 769MB + download-ready
+- Disk safety: PC package retention now latest-only (770MB×3 would fill 2.5GB disk); removed dated copies
+- Verified button path: POST /api/system/end-session (admin) → all steps ok in 36s
+- GitHub step ready but blocked: no GITHUB_TOKEN in .env — user must add token

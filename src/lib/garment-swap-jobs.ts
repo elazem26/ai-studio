@@ -21,6 +21,8 @@ export type SwapJob = {
   stageLabelEn: string;
   percent: number;
   result?: Record<string, unknown>;
+  /** Multi-result support (numResults setting) — all generated variations. */
+  results?: Array<Record<string, unknown>>;
   error?: string;
   message?: string;
   createdAt: number;
@@ -70,7 +72,11 @@ export function updateSwapStage(id: string, stage: string, labelAr: string, labe
   j.updatedAt = Date.now();
 }
 
-export function finishSwapJob(id: string, result: Record<string, unknown>): void {
+export function finishSwapJob(
+  id: string,
+  result: Record<string, unknown>,
+  results?: Array<Record<string, unknown>>
+): void {
   const j = jobs.get(id);
   if (!j) return;
   j.status = "done";
@@ -79,6 +85,7 @@ export function finishSwapJob(id: string, result: Record<string, unknown>): void
   j.stageLabelAr = "اكتمل التبديل";
   j.stageLabelEn = "Swap complete";
   j.result = result;
+  if (results && results.length > 0) j.results = results;
   j.updatedAt = Date.now();
 }
 

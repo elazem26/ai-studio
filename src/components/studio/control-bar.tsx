@@ -128,6 +128,8 @@ export function ControlBar() {
             refIndex: m.refIndex,
             refImage: m.refImage ?? 0,
           })),
+          // MULTI-RESULT: same setting as the normal try-on path (عدد النتائج).
+          numResults: getEffectiveSettings(settings).numResults,
           async: true,
         }),
       });
@@ -193,18 +195,22 @@ export function ControlBar() {
 
       const r = job.result ?? {};
       const ts = Date.now();
-      setResults([
-        {
-          id: `swap-${ts}`,
-          url: r.url,
-          thumbnailUrl: r.url,
+      // MULTI-RESULT: the job returns every generated variation — show them all.
+      const jobResults: Array<Record<string, any>> = Array.isArray(job.results) && job.results.length
+        ? job.results
+        : [r];
+      setResults(
+        jobResults.map((item, i) => ({
+          id: `swap-${ts}-${i}`,
+          url: item.url,
+          thumbnailUrl: item.url,
           seed: "garment-swap-boxes",
-          width: r.width,
-          height: r.height,
+          width: item.width,
+          height: item.height,
           qualityScore: null,
-          createdAt: ts,
-        },
-      ]);
+          createdAt: ts + i,
+        }))
+      );
       pushStudioHistory(`Garment swap (boxes): ${mp.mappings.length} mapping(s)`);
       complete({
         modelUsed: r.method ?? "zai-edit-regional-garment",
@@ -223,7 +229,7 @@ export function ControlBar() {
         variant: "destructive",
       });
     }
-  }, [source, startGen, updateStep, setResults, complete, setError, pushStudioHistory, toast, locale]);
+  }, [source, startGen, updateStep, setResults, complete, setError, pushStudioHistory, toast, locale, settings]);
 
   const handleGenerate = useCallback(async () => {
     if (!source) {

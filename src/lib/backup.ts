@@ -157,13 +157,15 @@ export async function cleanJunk(dryRun = false) {
       pruned.push(path.join(path.relative(PROJECT, loc) || loc, old));
     }
   }
-  // prune old dated PC packages in download/ (keep latest + 2 newest dated)
+  // prune dated PC packages in download/ (policy 2026-10-29: only the
+  // undated latest is kept — dated copies are 770MB each and would
+  // exhaust the disk)
   const dl = await fs.readdir(DOWNLOAD_DIR).catch(() => [] as string[]);
   const pcDated = dl
     .filter((f) => /^AI-Studio-PC-Complete-\d{4}-\d{2}-\d{2}\.tar\.gz$/.test(f))
     .sort()
     .reverse();
-  for (const old of pcDated.slice(2)) {
+  for (const old of pcDated.slice(0)) {
     const p = path.join(DOWNLOAD_DIR, old);
     const st = await fs.stat(p).catch(() => null);
     if (st) freedKB += Math.round(st.size / 1024);
@@ -215,9 +217,11 @@ export async function buildPCPackage(): Promise<{ file: string; sizeBytes: numbe
   if (code !== 0) throw new Error("tar(PC) failed: " + stderr);
   const st = await fs.stat(tmp);
   await fs.mkdir(DOWNLOAD_DIR, { recursive: true });
-  const stamp = new Date().toISOString().slice(0, 10);
+  // DISK POLICY: PC package is ~770MB (models included). With a ~2.5GB
+  // free disk, keeping dated copies (770MB × 3) would fill it → keep
+  // ONLY the undated latest copy; dated clean tarballs (2.2MB) already
+  // provide history in the 6 backup locations.
   await fs.copyFile(tmp, path.join(DOWNLOAD_DIR, "AI-Studio-PC-Complete.tar.gz"));
-  await fs.copyFile(tmp, path.join(DOWNLOAD_DIR, `AI-Studio-PC-Complete-${stamp}.tar.gz`));
   await fs.unlink(tmp).catch(() => {});
   const dest = path.join(DOWNLOAD_DIR, "AI-Studio-PC-Complete.tar.gz");
   const st2 = await fs.stat(dest);

@@ -419,6 +419,8 @@ type SwapParams = {
   /** ONE OR MORE reference images (multi-reference support). */
   garmentPaths: string[];
   mappings: Array<{ sourceIndex: number; refIndex: number; refImage: number }>;
+  /** How many result variations to generate (from settings عدد النتائج). */
+  numResults: number;
 };
 
 function parseSwapParams(body: any): { params?: SwapParams; error?: string; message?: string } {
@@ -444,7 +446,11 @@ function parseSwapParams(body: any): { params?: SwapParams; error?: string; mess
   if (!mappings.length) {
     return { error: "Missing mappings", message: "حدد ربطاً واحداً على الأقل (مصدر ← مرجع)" };
   }
-  return { params: { sourcePath, garmentPaths, mappings } };
+  // Multi-result: honor the studio settings (1 | 2 | 4 | 8) — each run is an
+  // independent generation so the results differ from one another.
+  const rawNum = Number(body?.numResults);
+  const numResults = [1, 2, 4, 8].includes(rawNum) ? rawNum : 1;
+  return { params: { sourcePath, garmentPaths, mappings, numResults } };
 }
 
 /** Map a thrown error to an HTTP NextResponse (sync mode). */
@@ -715,11 +721,22 @@ export async function POST(req: NextRequest) {
     // Background execution — NOT awaited; survives any client/proxy timeout.
     void (async () => {
       try {
-        const result = await runSwapPipeline(params, (stage, ar, en, percent) =>
-          updateSwapStage(jobId, stage, ar, en, percent)
-        );
-        finishSwapJob(jobId, result);
-        console.log(`[garment-swap] job ${jobId} done`);
+        const n = Math.max(1, params.numResults || 1);
+        const all: Array<Record<string, unknown>> = [];
+        let first: Record<string, unknown> | undefined;
+        for (let r = 0; r < n; r++) {
+          // Scale each run's inner progress into its slice of 0-100.
+          const slice = 100 / n;
+          const result = await runSwapPipeline(params, (stage, ar, en, percent) => {
+            const scaled = r * slice + (percent / 100) * slice;
+            const tag = n > 1 ? ` [النتيجة ${r + 1}/${n}]` : "";
+            updateSwapStage(jobId, stage, (ar || "") + tag, (en || "") + (n > 1 ? ` [result ${r + 1}/${n}]` : ""), scaled);
+          });
+          if (!first) first = result;
+          all.push(result);
+        }
+        finishSwapJob(jobId, first!, all);
+        console.log(`[garment-swap] job ${jobId} done (${all.length} result(s))`);
       } catch (e) {
         const msg = (e as any)?.message ?? (e instanceof Error ? e.message : String(e));
         console.warn(`[garment-swap] job ${jobId} failed: ${msg}`);

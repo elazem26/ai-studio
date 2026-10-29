@@ -60,7 +60,17 @@ echo "staged size (excl .git): $(du -sh --exclude=.git "$S" | cut -f1)"
 
 echo "[3/6] verify clean set + .env present..."
 for junk in data/uploads data/results extracted tool-results download mini-services/face-swap-pro/models; do
-  if [ -e "$S/$junk" ]; then echo "FATAL: junk survived staging: $junk"; exit 1; fi
+  if [ -e "$S/$junk" ]; then
+    # models/ may hold ONLY the README note (recreated by step [4/6] on
+    # every run; rsync excludes the path so it is never auto-removed).
+    # Any OTHER content (onnx/pt/bin...) = real junk survived → fatal.
+    if [ "$junk" = "mini-services/face-swap-pro/models" ]; then
+      extra=$(find "$S/$junk" -type f ! -name 'README.txt' 2>/dev/null | head -3)
+      if [ -z "$extra" ]; then continue; fi
+      echo "FATAL: model binaries survived staging: $extra"; exit 1
+    fi
+    echo "FATAL: junk survived staging: $junk"; exit 1
+  fi
 done
 test -f "$S/.env" && echo "OK: .env staged ($(wc -c < "$S/.env") bytes)" || { echo "FATAL: .env missing"; exit 1; }
 test -f "$S/db/custom.db" && echo "OK: db staged" || echo "WARN: db missing"

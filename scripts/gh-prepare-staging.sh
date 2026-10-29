@@ -60,7 +60,7 @@ fi
 echo "staged size (excl .git): $(du -sh --exclude=.git "$S" | cut -f1)"
 
 echo "[3/6] verify clean set + .env present..."
-for junk in data/uploads data/results extracted tool-results download mini-services/face-swap-pro/models; do
+for junk in data/uploads data/results extracted tool-results download upload mini-services/face-swap-pro/models; do
   if [ -e "$S/$junk" ]; then
     # models/ may hold ONLY the README note (recreated by step [4/6] on
     # every run; rsync excludes the path so it is never auto-removed).

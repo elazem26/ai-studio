@@ -512,3 +512,13 @@ Stage Summary:
 - Disk safety: PC package retention now latest-only (770MB×3 would fill 2.5GB disk); removed dated copies
 - Verified button path: POST /api/system/end-session (admin) → all steps ok in 36s
 - GitHub step ready but blocked: no GITHUB_TOKEN in .env — user must add token
+
+## 2026-10-29 — GitHub token configured + first clean upload DONE
+- New token from owner added to .env (GITHUB_TOKEN + GITHUB_BACKUP_REPO=elazem26/ai-studio)
+- Token validated: user elazem26, full scopes (repo + delete_repo)
+- Fixed 3 chain bugs discovered during first push:
+  1. gh-prepare-staging.sh: circular check — step[4/6] creates models/README.txt but step[3/6] rejected models/ existence on next run → now allows README-only models dir
+  2. gh-push-full.sh: passing owner/repo to create-API made GitHub create junk repo "elazem26-ai-studio" → now strips prefix + checks existence first (junk repo deleted)
+  3. Stale upload/ zip survived in staging (rsync --delete protects excluded paths) → manual purge + added upload to junk check + rsync exclude
+- Memory guard: freed 1.6GB by stopping face-swap-pro during push (restarted after; port 3030)
+- RESULT: github.com/elazem26/ai-studio = CLEAN (1328 files, 0 media/models/zip, no upload/, has .env+db+code, private)

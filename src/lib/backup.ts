@@ -23,6 +23,16 @@ import { execFile } from "child_process";
 export const PROJECT = "/home/z/my-project";
 export const DOWNLOAD_DIR = path.join(PROJECT, "download");
 
+/** App version (package.json) — used for the PC package filename. */
+export async function getAppVersion(): Promise<string> {
+  try {
+    const pkg = JSON.parse(await fs.readFile(path.join(PROJECT, "package.json"), "utf8"));
+    return pkg.version || "5.5.0";
+  } catch {
+    return "5.5.0";
+  }
+}
+
 /**
  * Backup locations per owner spec (2026-10-29):
  *   5 locations OUTSIDE the project folder + 1 location INSIDE it.
@@ -204,6 +214,12 @@ async function dirSizeKB(dir: string): Promise<number> {
  */
 export async function buildPCPackage(): Promise<{ file: string; sizeBytes: number; hasModels: boolean }> {
   const targets = await backupTargets();
+  // one-click launchers at package root (Windows / macOS / Linux)
+  for (const launcher of [
+    "START-AI-STUDIO.bat", "start-ai-studio.sh", "START-AI-STUDIO.command", "README-START.txt",
+  ]) {
+    try { await fs.access(path.join(PROJECT, launcher)); targets.push(launcher); } catch { /* missing → skip */ }
+  }
   // everything the PC needs:
   const extra = [".env"];
   const modelFile = "mini-services/face-swap-pro/models/inswapper_128.onnx";
@@ -217,13 +233,25 @@ export async function buildPCPackage(): Promise<{ file: string; sizeBytes: numbe
   if (code !== 0) throw new Error("tar(PC) failed: " + stderr);
   const st = await fs.stat(tmp);
   await fs.mkdir(DOWNLOAD_DIR, { recursive: true });
+  // VERSIONED NAME (owner spec 2026-10-29): AI-Studio-v5.5.0.tar.gz
   // DISK POLICY: PC package is ~770MB (models included). With a ~2.5GB
   // free disk, keeping dated copies (770MB × 3) would fill it → keep
-  // ONLY the undated latest copy; dated clean tarballs (2.2MB) already
-  // provide history in the 6 backup locations.
-  await fs.copyFile(tmp, path.join(DOWNLOAD_DIR, "AI-Studio-PC-Complete.tar.gz"));
+  // ONLY the current-version copy; older AI-Studio-v*.tar.gz are
+  // removed. Dated clean tarballs (2.2MB) provide history in the 6
+  // backup locations.
+  const version = await getAppVersion();
+  const dest = path.join(DOWNLOAD_DIR, `AI-Studio-v${version}.tar.gz`);
+  await fs.copyFile(tmp, dest);
   await fs.unlink(tmp).catch(() => {});
-  const dest = path.join(DOWNLOAD_DIR, "AI-Studio-PC-Complete.tar.gz");
+  // remove old-version PC packages (disk safety)
+  const dl = await fs.readdir(DOWNLOAD_DIR).catch(() => [] as string[]);
+  for (const f of dl) {
+    if (/^AI-Studio-v.*\.tar\.gz$/.test(f) && f !== `AI-Studio-v${version}.tar.gz`) {
+      await fs.unlink(path.join(DOWNLOAD_DIR, f)).catch(() => {});
+    }
+  }
+  // legacy alias removal (pre-5.5.0 naming)
+  await fs.unlink(path.join(DOWNLOAD_DIR, "AI-Studio-PC-Complete.tar.gz")).catch(() => {});
   const st2 = await fs.stat(dest);
   return { file: dest, sizeBytes: st2.size, hasModels };
 }

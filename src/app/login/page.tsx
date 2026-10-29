@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Loader2, Shield } from "lucide-react";
+import { QuickLaunch } from "@/components/shared/quick-launch";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -74,7 +75,8 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-background p-4" dir="rtl">
-      <Card className="w-full max-w-md studio-panel border-cyan-accent/30">
+      <div className="w-full max-w-md space-y-4">
+        <Card className="studio-panel border-cyan-accent/30">
         <CardHeader className="text-center">
           <div className="mx-auto mb-4 h-16 w-16 rounded-2xl bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center">
             <Shield className="h-8 w-8 text-white" />
@@ -144,7 +146,15 @@ export default function LoginPage() {
             </>
           )}
         </CardContent>
-      </Card>
+        </Card>
+
+        {/* === Quick Launch: 3 one-click run buttons (v5.5.0) === */}
+        <Card className="studio-panel border-muted">
+          <CardContent className="pt-4">
+            <QuickLaunch />
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }

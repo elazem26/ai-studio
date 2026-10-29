@@ -8,6 +8,7 @@ import { useModeStore } from "@/stores/mode-store";
 import { useUndoRedoStore } from "@/stores/undo-redo-store";
 import { useTheme } from "next-themes";
 import { CompleteDownloadDialog } from "@/components/studio/complete-download-dialog";
+import { QuickLaunch } from "@/components/shared/quick-launch";
 import {
   Shirt,
   Sparkles,
@@ -795,6 +796,9 @@ export function StudioHeader() {
                 </p>
               </TooltipContent>
             </Tooltip>
+
+            {/* === Quick Launch: 3 one-click run buttons (v5.5.0) === */}
+            <QuickLaunch compact />
           </div>
           )}
 

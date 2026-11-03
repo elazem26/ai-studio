@@ -1,0 +1,94 @@
+# boot-fix.yml — restart the Codespace app with the db bootstrap + full E2E:
+# reset → start-production.sh (db bootstrap + npx build when stale) →
+# wait → login → upload real fixture faces → part-transplant mode=head.
+name: boot-fix
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: boot-fix
+  cancel-in-progress: false
+
+jobs:
+  boot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GH_TOKEN: ${{ secrets.CS_KEEPALIVE_TOKEN }}
+      CS: disreputable-wizard-px65r97q6xpfrjg4
+    steps:
+      - name: Restart app + full E2E
+        run: |
+          gh cs ssh -c "$CS" -- 'bash -s' <<'EOF'
+          set +e
+          cd /workspaces/ai-studio 2>/dev/null || cd /home/z/my-project || exit 1
+          git fetch origin main 2>/dev/null || git fetch origin 2>/dev/null
+          git reset --hard origin/main >/dev/null 2>&1
+          echo "commit: $(git rev-parse --short HEAD)"
+          echo "killing old next-server…"
+          pkill -f 'standalone/server.js' 2>/dev/null; pkill -f 'next-server' 2>/dev/null; pkill -f 'next start' 2>/dev/null
+          sleep 3
+          mkdir -p data
+          setsid nohup bash scripts/start-production.sh > data/server.log 2>&1 < /dev/null &
+          echo "booting (db bootstrap + build if stale)…"
+          for i in $(seq 1 60); do
+            sleep 10
+            c=$(curl -s -o /dev/null -w '%{http_code}' -m 5 http://localhost:3000/login)
+            [ "$c" = "200" ] && { echo "app up after ~$((i*10))s"; break; }
+          done
+          echo "login page: $(curl -s -o /dev/null -w '%{http_code}' -m 5 http://localhost:3000/login)"
+          echo "===== E2E ====="
+          python3 - <<'PYEOF'
+          import json, time, urllib.request, urllib.error, os
+          BASE = "http://localhost:3000"
+          SRC = os.path.join(os.getcwd(), "tests", "fixtures", "face-source.png")
+          REF = os.path.join(os.getcwd(), "tests", "fixtures", "face-ref.png")
+
+          def post(path, data=None, raw=None, timeout=150):
+              req = urllib.request.Request(BASE + path,
+                  data=(raw if raw is not None else json.dumps(data).encode()),
+                  headers={} if raw is not None else {"Content-Type": "application/json"},
+                  method="POST")
+              try:
+                  with urllib.request.urlopen(req, timeout=timeout) as r:
+                      return r.status, r.read().decode()
+              except urllib.error.HTTPError as e:
+                  return e.code, e.read().decode()[:300]
+              except Exception as e:
+                  return 0, str(e)
+
+          s, txt = post("/api/auth/login", {"email": "mohamed", "password": "1970"})
+          print("LOGIN:", s, txt[:120])
+          if s != 200:
+              print("E2E FAIL at login"); raise SystemExit
+
+          def upload(png, name):
+              b = "----bootfix789"
+              body = (f"--{b}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{name}\"\r\n"
+                      f"Content-Type: image/png\r\n\r\n").encode() + png + f"\r\n--{b}--\r\n".encode()
+              s, txt = post("/api/images/upload", raw=body, timeout=60)
+              try: return json.loads(txt).get("path")
+              except Exception:
+                  print("upload fail:", s, txt[:150]); return None
+
+          src = upload(open(SRC, "rb").read(), "source.png")
+          ref = upload(open(REF, "rb").read(), "ref.png")
+          print("paths:", src, ref)
+          if not (src and ref): print("E2E FAIL at uploads"); raise SystemExit
+
+          for attempt in range(1, 4):
+              s, txt = post("/api/images/part-transplant", {
+                  "sourcePath": src, "refPath": ref, "mode": "head",
+                  "region": "full", "scale": 1.0, "colorStrength": 0.6})
+              print(f"TRANSPLANT try{attempt}: {s} {txt[:150]}")
+              if s == 200 and '"url"' in txt:
+                  print("E2E PASS: result url returned → the result box WILL appear")
+                  break
+              time.sleep(20)
+          else:
+              print("E2E FAIL: no transplant result after 3 tries")
+          PYEOF
+          echo "===== server.log tail ====="
+          tail -c 700 data/server.log | tail -8
+          EOF

@@ -6,6 +6,7 @@ import { logEvent } from "@/lib/logger";
 import { resolveFilePath, resolveDataRoot } from "@/lib/security/resolve-file-path";
 import { tryAcquireProcessingLock, releaseProcessingLock, getProcessingStatus } from "@/lib/processing-lock";
 import { findMiniServiceScript, miniServiceRoot } from "@/lib/mini-service";
+import { getPythonBin, spawnSafe } from "@/lib/python-bin";
 
 /**
  * POST /api/images/part-transplant — نقل جزء من صورة مرجعية إلى الصورة المصدر
@@ -25,8 +26,7 @@ const MINI_SERVICE_TRANSPLANT = `${MINI_SERVICE_URL}/transplant`;
 const MINI_SERVICE_HEALTH = `${MINI_SERVICE_URL}/health`;
 
 function getPythonCmd(): string {
-  if (process.platform === "win32") return "python";
-  return "/home/z/.venv/bin/python3";
+  return getPythonBin();
 }
 
 function getProjectRoot(): string {
@@ -49,7 +49,7 @@ async function spawnServiceIfDown(): Promise<boolean> {
   if (await isMiniServiceUp()) return true;
   try {
     const { spawn } = (typeof eval !== "undefined") ? eval("require")("child_process") : require("child_process");
-    const proc = spawn(getPythonCmd(), [getServiceScript()], {
+    const proc = spawnSafe(getPythonBin(), [getServiceScript()], {
       cwd: getProjectRoot(),
       detached: true,
       stdio: "ignore",

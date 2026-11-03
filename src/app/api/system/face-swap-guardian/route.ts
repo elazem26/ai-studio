@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { promises as fs } from "fs";
 import { spawn } from "child_process";
 import path from "path";
+import { getPythonBin, spawnSafe } from "@/lib/python-bin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -9,7 +10,7 @@ export const dynamic = "force-dynamic";
 const GUARDIAN_SCRIPT = "/home/z/my-project/scripts/face-swap-guardian.py";
 const GUARDIAN_PID_FILE = "/home/z/my-project/extracted/face-swap-guardian.pid";
 const GUARDIAN_STATUS_FILE = "/home/z/my-project/extracted/face-swap-guardian-status.json";
-const PYTHON_BIN = "/home/z/.venv/bin/python3";
+const PYTHON_BIN = getPythonBin();
 const FACE_SWAP_SCRIPT = "/home/z/my-project/extracted/mini-services/face-swap-pro/server.py";
 
 async function isGuardianRunning(): Promise<{ running: boolean; pid: number | null }> {
@@ -33,7 +34,7 @@ async function startGuardian(): Promise<{ ok: boolean; pid: number | null }> {
   const { running, pid } = await isGuardianRunning();
   if (running) return { ok: true, pid };
 
-  const child = spawn(PYTHON_BIN, [GUARDIAN_SCRIPT], {
+  const child = spawnSafe(PYTHON_BIN, [GUARDIAN_SCRIPT], {
     detached: true,
     stdio: "ignore",
     cwd: "/home/z/my-project/extracted",
@@ -68,7 +69,7 @@ async function restartFaceSwapService(): Promise<boolean> {
   } catch {}
 
   // Start fresh
-  const child = spawn(PYTHON_BIN, [FACE_SWAP_SCRIPT], {
+  const child = spawnSafe(PYTHON_BIN, [FACE_SWAP_SCRIPT], {
     detached: true,
     stdio: "ignore",
     cwd: "/home/z/my-project/extracted",

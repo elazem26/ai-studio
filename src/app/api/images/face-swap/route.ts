@@ -6,6 +6,7 @@ import { logEvent } from "@/lib/logger";
 import { resolveFilePath, resolveDataRoot } from "@/lib/security/resolve-file-path";
 import { tryAcquireProcessingLock, releaseProcessingLock, getProcessingStatus } from "@/lib/processing-lock";
 import { findMiniServiceScript, miniServiceRoot } from "@/lib/mini-service";
+import { getPythonBin, spawnSafe } from "@/lib/python-bin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,8 +17,7 @@ const MINI_SERVICE_HEALTH = `${MINI_SERVICE_URL}/health`;
 
 /** Detect the Python command based on platform */
 function getPythonCmd(): string {
-  if (process.platform === "win32") return "python";
-  return "/home/z/.venv/bin/python3";
+  return getPythonBin();
 }
 
 /** Get the project root that contains mini-services/ (for spawn cwd) */
@@ -47,7 +47,7 @@ async function spawnServiceIfDown(): Promise<boolean> {
     const CWD = getProjectRoot();
 
     // Try to spawn the service
-    const proc = spawn(PYTHON, [SCRIPT], {
+    const proc = spawnSafe(PYTHON, [SCRIPT], {
       cwd: CWD,
       detached: true,
       stdio: "ignore",

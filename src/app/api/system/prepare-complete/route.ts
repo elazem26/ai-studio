@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { promises as fs } from "fs";
 import { execFile, spawn } from "child_process";
 import { requireAdmin } from "@/lib/auth";
+import { miniServiceRoot } from "@/lib/mini-service";
+import { spawnSafe } from "@/lib/python-bin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,11 +22,11 @@ async function isBuildRunning(): Promise<boolean> {
 
 async function triggerBuild(): Promise<void> {
   // Spawn the build script detached so it survives this request
-  const child = spawn(
+  const child = spawnSafe(
     "bash",
     [BUILD_SCRIPT],
     {
-      cwd: "/home/z/my-project",
+      cwd: miniServiceRoot(),
       detached: true,
       stdio: "ignore",
     }

@@ -7,6 +7,7 @@ import { resolveFilePath } from "@/lib/security/resolve-file-path";
 import { tryAcquireProcessingLock, releaseProcessingLock, getProcessingStatus } from "@/lib/processing-lock";
 import { sweepOldVideos } from "@/lib/backup";
 import { findMiniServiceScript, miniServiceRoot } from "@/lib/mini-service";
+import { getPythonBin, spawnSafe } from "@/lib/python-bin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -40,7 +41,7 @@ async function spawnServiceIfDown(): Promise<boolean> {
   if (await isMiniServiceUp()) return true;
   try {
     const { spawn } = (typeof eval !== "undefined") ? eval("require")("child_process") : require("child_process");
-    const proc = spawn("/home/z/.venv/bin/python3", [findMiniServiceScript()], {
+    const proc = spawnSafe(getPythonBin(), [findMiniServiceScript()], {
       cwd: miniServiceRoot(), detached: true, stdio: "ignore", env: { ...process.env, PYTHONUNBUFFERED: "1" },
     });
     proc.unref();

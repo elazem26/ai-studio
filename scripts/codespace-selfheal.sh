@@ -2,7 +2,12 @@
 # codespace-selfheal.sh — REST-API self-heal without gh CLI (recreate after sandbox recycle)
 # Start codespace -> wait Available -> publicize port 3000 -> poll public URL.
 set -u
-TOKEN=$(head -1 /home/z/my-project/data/.gh-token)
+# Auto-restore token from git remote if the file was lost by a sandbox recycle
+if [ ! -s /home/z/my-project/data/.gh-token ]; then
+  git -C /home/z/my-project remote get-url origin 2>/dev/null | sed -E 's|.*x-access-token:([^@]+)@.*|\1|' > /home/z/my-project/data/.gh-token
+  chmod 600 /home/z/my-project/data/.gh-token 2>/dev/null
+fi
+TOKEN=$(head -1 /home/z/my-project/data/.gh-token 2>/dev/null)
 API="https://api.github.com"
 CS="disreputable-wizard-px65r97q6xpfrjg4"
 URL="https://disreputable-wizard-px65r97q6xpfrjg4-3000.app.github.dev"

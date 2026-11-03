@@ -40,6 +40,23 @@ for compiled in \
   fi
 done
 
+# ---- 2.5 DATABASE BOOTSTRAP (Codespace-fresh checkouts) ----
+# The sqlite db is NOT in the repo (gitignored), and a stale/missing
+# DATABASE_URL or prisma client makes every /api/auth/login return 500.
+# ensureOwnerAccount() seeds the owner on first login once the schema exists.
+mkdir -p db
+if [ -f .env ] && grep -q '^DATABASE_URL=' .env; then
+  sed -i "s|^DATABASE_URL=.*|DATABASE_URL=file:$(pwd)/db/custom.db|" .env
+else
+  echo "DATABASE_URL=file:$(pwd)/db/custom.db" >> .env
+fi
+if command -v bun >/dev/null 2>&1; then PRISMA="bunx prisma"; else PRISMA="npx --yes prisma"; fi
+if [ ! -f db/custom.db ]; then
+  echo "[start-production] db/custom.db missing — creating schema…"
+  $PRISMA db push --accept-data-loss --skip-generate >/dev/null 2>&1 || true
+fi
+$PRISMA generate >/dev/null 2>&1 || true
+
 if [ "$STALE" = "1" ]; then
   echo "[start-production] building production bundle…"
   # bun exists in the Z.ai sandbox but NOT in Codespaces (javascript-node

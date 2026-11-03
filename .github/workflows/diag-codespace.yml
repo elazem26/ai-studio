@@ -1,0 +1,113 @@
+# diag-codespace.yml — Deep diagnosis INSIDE the Codespace for the
+# "transplant page shows no result box" report:
+#   1. environment (python paths, venv, models)
+#   2. services (3000 web, 3030 face-swap mini-service)
+#   3. full E2E transplant via the API (login → upload → part-transplant)
+#   4. recent server.log errors
+name: diag-codespace
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: diag-codespace
+  cancel-in-progress: false
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ secrets.CS_KEEPALIVE_TOKEN }}
+      CS: disreputable-wizard-px65r97q6xpfrjg4
+    steps:
+      - name: Deep diagnosis inside Codespace
+        run: |
+          gh cs ssh -c "$CS" -- 'bash -s' <<'EOF'
+          set +e
+          echo "===== ENV ====="
+          echo "user: $(whoami)"
+          echo "venv_z_python: $(ls /home/z/.venv/bin/python3 2>&1)"
+          echo "system_python: $(which python3) ($(python3 --version 2>&1))"
+          echo "venv_pkgs: $(ls /home/z/.venv/lib/*/site-packages 2>/dev/null | grep -ci 'cv2\|opencv') opencv-related"
+          echo "models: $(ls /home/z/.insightface/models/inswapper_128.onnx 2>&1)"
+          echo "===== REPO ====="
+          cd /workspaces/ai-studio 2>/dev/null || cd /home/z/my-project || exit 1
+          echo "cwd: $(pwd)  commit: $(git rev-parse --short HEAD 2>/dev/null)"
+          echo "python-cmd-in-route: $(grep -m1 'home/z/.venv' src/app/api/images/part-transplant/route.ts)"
+          echo "===== SERVICES ====="
+          echo "web3000: $(curl -s -o /dev/null -w '%{http_code}' -m 5 http://localhost:3000/)"
+          echo "health3030: $(curl -s -m 3 http://localhost:3030/health | head -c 200)"
+          echo "===== E2E TRANSPLANT ====="
+          python3 - <<'PYEOF'
+          import base64, io, json, urllib.request
+
+          BASE = "http://localhost:3000"
+
+          def tiny_img(w=640, h=640, seed=0):
+              try:
+                  from PIL import Image
+                  import random
+                  random.seed(seed)
+                  img = Image.new("RGB", (w, h))
+                  px = img.load()
+                  for y in range(0, h, 4):
+                      for x in range(0, w, 4):
+                          px[x, y] = (random.randint(50, 200), random.randint(50, 200), random.randint(50, 200))
+                  buf = io.BytesIO()
+                  img.save(buf, "JPEG", quality=90)
+                  return buf.getvalue()
+              except Exception as e:
+                  print("PIL fail:", e)
+                  # 1x1 red PNG fallback
+                  return base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+
+          def post(path, data=None, raw=None):
+              url = BASE + path
+              if raw is not None:
+                  req = urllib.request.Request(url, data=raw, method="POST")
+              else:
+                  req = urllib.request.Request(url, data=json.dumps(data).encode(),
+                                               headers={"Content-Type": "application/json"}, method="POST")
+              try:
+                  with urllib.request.urlopen(req, timeout=140) as r:
+                      return r.status, r.read().decode()[:500]
+              except urllib.error.HTTPError as e:
+                  return e.code, e.read().decode()[:500]
+              except Exception as e:
+                  return 0, str(e)
+
+          print("login:", post("/api/auth/login", {"email": "mohamed", "password": "1970"}))
+
+          img1, img2 = tiny_img(seed=1), tiny_img(seed=2)
+          def upload(buf, name):
+              boundary = "----diag123"
+              body = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{name}\"\r\n"
+                      f"Content-Type: image/jpeg\r\n\r\n").encode() + buf + f"\r\n--{boundary}--\r\n".encode()
+              s, b = post("/api/images/upload", raw=body)
+              print("upload:", s, b[:200])
+              try:
+                  return json.loads(b).get("path")
+              except Exception:
+                  # response truncated at 500 chars; re-fetch without truncation
+                  boundary = "----diag123"
+                  body2 = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{name}\"\r\n"
+                           f"Content-Type: image/jpeg\r\n\r\n").encode() + buf + f"\r\n--{boundary}--\r\n".encode()
+                  req = urllib.request.Request(BASE + "/api/images/upload", data=body2, method="POST")
+                  with urllib.request.urlopen(req, timeout=60) as r:
+                      return json.loads(r.read().decode()).get("path")
+
+          src = upload(img1, "src.jpg")
+          ref = upload(img2, "ref.jpg")
+          print("paths:", src, ref)
+          if src and ref:
+              s, b = post("/api/images/part-transplant", {
+                  "sourcePath": src, "refPath": ref, "mode": "object",
+                  "region": "full", "scale": 1.0, "colorStrength": 0.6})
+              print("TRANSPLANT:", s, b)
+          PYEOF
+          echo "===== RECENT ERRORS ====="
+          tail -c 1500 data/server.log 2>/dev/null | tail -12
+          grep -i "transplant" data/server.log 2>/dev/null | tail -5
+          echo "===== DONE ====="
+          EOF

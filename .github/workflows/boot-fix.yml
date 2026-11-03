@@ -46,9 +46,9 @@ jobs:
           REF = os.path.join(os.getcwd(), "tests", "fixtures", "face-ref.png")
           COOKIE = None
 
-          def post(path, data=None, raw=None, timeout=150):
+          def post(path, data=None, raw=None, timeout=150, extra_headers=None):
               global COOKIE
-              hdr = {}
+              hdr = dict(extra_headers or {})
               if COOKIE: hdr["Cookie"] = COOKIE
               req = urllib.request.Request(BASE + path,
                   data=(raw if raw is not None else json.dumps(data).encode()),
@@ -72,8 +72,12 @@ jobs:
               b = "----bootfix789"
               body = (f"--{b}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{name}\"\r\n"
                       f"Content-Type: image/png\r\n\r\n").encode() + png + f"\r\n--{b}--\r\n".encode()
-              s, txt = post("/api/images/upload", raw=body, timeout=60)
-              try: return json.loads(txt).get("path")
+              s, txt = post("/api/images/upload", raw=body, timeout=60,
+                            extra_headers={"Content-Type": f"multipart/form-data; boundary={b}"})
+              try:
+                  p = json.loads(txt).get("path")
+                  if not p: print("upload fail:", s, txt[:150])
+                  return p
               except Exception:
                   print("upload fail:", s, txt[:150]); return None
 

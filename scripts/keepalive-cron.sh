@@ -6,6 +6,7 @@
 #    (it starts the Codespace, re-publicizes the port and SSH-rescues the app).
 export GH_TOKEN="${GH_TOKEN:-$(head -1 /home/z/my-project/data/.gh-token 2>/dev/null)}"
 if [ -z "$GH_TOKEN" ]; then
+  mkdir -p /home/z/my-project/data
   GH_TOKEN=$(git -C /home/z/my-project remote get-url origin 2>/dev/null | sed -E 's|.*x-access-token:([^@]+)@.*|\1|')
   [ -n "$GH_TOKEN" ] && { printf '%s' "$GH_TOKEN" > /home/z/my-project/data/.gh-token; chmod 600 /home/z/my-project/data/.gh-token; }
 fi

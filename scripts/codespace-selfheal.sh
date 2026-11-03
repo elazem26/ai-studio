@@ -4,6 +4,7 @@
 set -u
 # Auto-restore token from git remote if the file was lost by a sandbox recycle
 if [ ! -s /home/z/my-project/data/.gh-token ]; then
+  mkdir -p /home/z/my-project/data
   git -C /home/z/my-project remote get-url origin 2>/dev/null | sed -E 's|.*x-access-token:([^@]+)@.*|\1|' > /home/z/my-project/data/.gh-token
   chmod 600 /home/z/my-project/data/.gh-token 2>/dev/null
 fi

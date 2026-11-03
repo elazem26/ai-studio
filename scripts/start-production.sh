@@ -79,6 +79,10 @@ fi
 [ -d .next/standalone/public ] || cp -r public .next/standalone/public
 
 echo "[start-production] launching standalone server on :3000"
+# The standalone server does NOT reliably read .env from the project root
+# (Next bakes env at build time) — export the db URL explicitly so prisma
+# ALWAYS resolves it at runtime.
+export DATABASE_URL="file:$(pwd)/db/custom.db"
 if command -v bun >/dev/null 2>&1; then
   exec bun .next/standalone/server.js
 else

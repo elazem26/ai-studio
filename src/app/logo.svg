@@ -1,0 +1,159 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="AI Studio icon: face, shirt, arrow, palette on purple-magenta gradient">
+  <defs>
+    <!-- ===== Squircle background — violet -> magenta diagonal gradient ===== -->
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%"   stop-color="#6A0DAD"/>
+      <stop offset="55%"  stop-color="#9D17C5"/>
+      <stop offset="100%" stop-color="#D400FF"/>
+    </linearGradient>
+    <radialGradient id="bgGloss" cx="0.28" cy="0.18" r="0.65">
+      <stop offset="0%"  stop-color="#ffffff" stop-opacity="0.32"/>
+      <stop offset="55%" stop-color="#ffffff" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="innerShadow" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0%"  stop-color="#2a0040" stop-opacity="0.35"/>
+      <stop offset="60%" stop-color="#2a0040" stop-opacity="0"/>
+    </linearGradient>
+
+    <!-- ===== White frosted button tile fill ===== -->
+    <linearGradient id="tileFill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"  stop-color="#ffffff" stop-opacity="0.96"/>
+      <stop offset="100%" stop-color="#f5e8ff" stop-opacity="0.92"/>
+    </linearGradient>
+
+    <!-- ===== Soft drop shadow for tiles ===== -->
+    <filter id="tileShadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="6"/>
+      <feOffset dx="0" dy="6" result="off"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.55"/></feComponentTransfer>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Squircle clip path (radius ~22% of 1024 ≈ 230) -->
+    <clipPath id="squircleClip">
+      <rect x="0" y="0" width="1024" height="1024" rx="230" ry="230"/>
+    </clipPath>
+  </defs>
+
+  <!-- ===================== Background squircle ===================== -->
+  <g clip-path="url(#squircleClip)">
+    <rect width="1024" height="1024" fill="url(#bg)"/>
+    <rect width="1024" height="1024" fill="url(#bgGloss)"/>
+    <rect width="1024" height="1024" fill="url(#innerShadow)"/>
+  </g>
+  <!-- Outer subtle ring -->
+  <rect x="2" y="2" width="1020" height="1020" rx="228" ry="228"
+        fill="none" stroke="#ffffff" stroke-width="2" opacity="0.10"/>
+
+  <!-- ===================== 2x2 grid of white tiles (CENTERED) =====================
+       Canvas 1024×1024. Squares 4×2 grid: each tile 300×300, gap 48, total 648×648.
+       For perfectly equal margins on all 4 sides, treat squares+text as one group:
+         Group height = 648 (squares) + 40 (gap) + ~130 (text) = 818
+         Group width  = 648 (squares wider than text)
+       Vertical:   top margin = (1024 - 818) / 2 = 103  → squares y = 103..751
+       Horizontal: left margin = (1024 - 648) / 2 = 188  → squares x = 188..836
+       Below squares: text area starts at y = 751 + 40 = 791, height ~130, ends at 921
+       Bottom margin = 1024 - 921 = 103  ✓  (matches top margin)
+       Right margin  = 1024 - 836 = 188  ✓  (matches left margin)
+  -->
+  <g filter="url(#tileShadow)">
+    <!-- Top-Left tile: Face -->
+    <rect x="188" y="103" width="300" height="300" rx="44" ry="44" fill="url(#tileFill)"/>
+    <!-- Top-Right tile: Shirt -->
+    <rect x="536" y="103" width="300" height="300" rx="44" ry="44" fill="url(#tileFill)"/>
+    <!-- Bottom-Left tile: Upward Arrow -->
+    <rect x="188" y="451" width="300" height="300" rx="44" ry="44" fill="url(#tileFill)"/>
+    <!-- Bottom-Right tile: Palette + Brush -->
+    <rect x="536" y="451" width="300" height="300" rx="44" ry="44" fill="url(#tileFill)"/>
+  </g>
+
+  <!-- ===================== Icon: Face (top-left, solid purple) =====================
+       Tile center = (188+150, 103+150) = (338, 253)
+  -->
+  <g transform="translate(338, 253)">
+    <ellipse cx="0" cy="0" rx="100" ry="118" fill="#6A0DAD"/>
+    <ellipse cx="-32" cy="-18" rx="11" ry="14" fill="#ffffff"/>
+    <ellipse cx="32"  cy="-18" rx="11" ry="14" fill="#ffffff"/>
+    <path d="M -42 30 Q 0 75 42 30" stroke="#ffffff" stroke-width="10"
+          stroke-linecap="round" fill="none"/>
+  </g>
+
+  <!-- ===================== Icon: Shirt (top-right, solid purple) =====================
+       Tile center = (536+150, 103+150) = (686, 253)
+  -->
+  <g transform="translate(686, 253)">
+    <path d="M -90 -50
+             L -110 -32
+             L -130 8
+             L -100 24
+             L -90 8
+             L -90 95
+             L 90 95
+             L 90 8
+             L 100 24
+             L 130 8
+             L 110 -32
+             L 90 -50
+             Q 60 -20 0 -20 Q -60 -20 -90 -50 Z"
+          fill="#6A0DAD" stroke="#3a0060" stroke-width="2" stroke-linejoin="round"/>
+    <path d="M -28 -50 L 0 -15 L 28 -50" stroke="#3a0060" stroke-width="6"
+          stroke-linejoin="round" fill="none"/>
+    <line x1="0" y1="-15" x2="0" y2="80" stroke="#3a0060" stroke-width="4"
+          stroke-dasharray="4 8" stroke-linecap="round"/>
+    <path d="M -65 -10 Q 0 5 65 -10" stroke="#9D17C5" stroke-width="3"
+          fill="none" opacity="0.55"/>
+  </g>
+
+  <!-- ===================== Icon: Upward Arrow (bottom-left, solid purple) =====================
+       Tile center = (188+150, 451+150) = (338, 601)
+  -->
+  <g transform="translate(338, 601)">
+    <rect x="-32" y="20" width="64" height="100" rx="14" fill="#6A0DAD" stroke="#3a0060" stroke-width="2"/>
+    <path d="M 0 -80
+             L 80 -10
+             L 50 -10
+             L 50 0
+             L -50 0
+             L -50 -10
+             L -80 -10 Z"
+          fill="#6A0DAD" stroke="#3a0060" stroke-width="2" stroke-linejoin="round"/>
+    <rect x="-22" y="30" width="10" height="80" rx="5" fill="#9D17C5" opacity="0.55"/>
+  </g>
+
+  <!-- ===================== Icon: Palette + Brush (bottom-right, solid purple) =====================
+       Tile center = (536+150, 451+150) = (686, 601)
+  -->
+  <g transform="translate(686, 601)">
+    <path d="M -90 -40
+             C -110 -10, -110 60, -55 75
+             C -10 88, 35 75, 55 60
+             L 78 60
+             C 92 60, 100 48, 100 35
+             C 100 5, 75 -25, 75 -25
+             C 75 -25, 40 -55, -10 -55
+             C -50 -55, -78 -55, -90 -40 Z"
+          fill="#6A0DAD" stroke="#3a0060" stroke-width="2"/>
+    <circle cx="68" cy="20" r="14" fill="#f5e8ff"/>
+    <circle cx="-55" cy="-15" r="9" fill="#ef4444"/>
+    <circle cx="-22" cy="-25" r="9" fill="#f59e0b"/>
+    <circle cx="15"  cy="-25" r="9" fill="#10b981"/>
+    <circle cx="35"  cy="-5"  r="9" fill="#06b6d4"/>
+    <circle cx="15"  cy="30"  r="9" fill="#3b82f6"/>
+    <circle cx="-22" cy="35"  r="9" fill="#a855f7"/>
+    <circle cx="-55" cy="15"  r="9" fill="#ec4899"/>
+    <g transform="rotate(45) translate(0, 0)">
+      <rect x="-6" y="0" width="12" height="85" rx="6" fill="#92400e"/>
+      <rect x="-9" y="-15" width="18" height="14" rx="3" fill="#cbd5e1"/>
+      <path d="M -9 -15 L 9 -15 L 7 -45 L -7 -45 Z" fill="#1f2937"/>
+    </g>
+  </g>
+
+  <!-- ===================== Text placeholder =====================
+       "AI Studio" text is drawn by PIL on top of the rasterized PNG.
+       Text area: y = 791..921 (height 130), horizontally centered at x=512.
+  ============================================================ -->
+</svg>

@@ -1,0 +1,83 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+
+# vercel
+.vercel
+
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+local-*
+.claude
+.z-ai-config
+*.log
+dev.log
+dev.out.log
+test
+prompt
+
+server.log
+# Skills directory
+/skills/
+# local-git hygiene (models & media never in git — same policy as GitHub backup)
+mini-services/face-swap-pro/models/
+*.onnx
+download/*.bundle
+data/backups/*.tar.gz
+download/*.tar.gz
+__pycache__/
+
+# runtime state / bloat — never push
+db/custom.db
+data/guardian-state.json
+data/guardian.lock
+data/session-state.json
+data/keepalive-cron.log
+data/.gh-token
+data/uploads/
+data/test-transplant/
+data/test-selection-live/
+data/backups/
+tool-results/
+.gh-lock
+public/ai-studio-complete.tar.gz*
+*.part
+/download/
+
+# gh cli binary — stays local only
+scripts/gh-cli/
+/upload/
+/data/

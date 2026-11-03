@@ -1,0 +1,52 @@
+# rescue-bun.yml — one-shot: boot the codespace app with bun resolved on PATH
+# (non-interactive SSH sessions don't source the profile, so `bun` was not
+# found and the rebuild failed). Also boots the python face-swap service.
+name: rescue-bun
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: rescue-bun
+  cancel-in-progress: false
+
+jobs:
+  rescue:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GH_TOKEN: ${{ secrets.CS_KEEPALIVE_TOKEN }}
+      CS: disreputable-wizard-px65r97q6xpfrjg4
+    steps:
+      - name: Locate bun, build and boot both services
+        run: |
+          gh cs ssh -c "$CS" -- '
+            cd /workspaces/ai-studio 2>/dev/null || cd /home/z/my-project || exit 1
+            echo "commit: $(git rev-parse --short HEAD)"
+            BUN=$(command -v bun || ls ~/.bun/bin/bun 2>/dev/null || find / -maxdepth 4 -name bun -type f 2>/dev/null | head -1)
+            echo "bun at: $BUN"
+            export PATH="$(dirname "$BUN"):$HOME/.bun/bin:/usr/local/bin:$PATH"
+            echo "bun version: $(bun --version 2>&1 | head -1)"
+            mkdir -p data
+            setsid nohup bash -c "export PATH=$(dirname $BUN):\$HOME/.bun/bin:/usr/local/bin:\$PATH; bash scripts/start-production.sh" > data/server.log 2>&1 < /dev/null &
+            echo "web boot launched"
+            setsid nohup /home/z/.venv/bin/python3 mini-services/face-swap-pro/server.py > data/face-swap-pro.log 2>&1 < /dev/null &
+            echo "python boot launched"
+          '
+      - name: Wait for web + python services
+        run: |
+          URL="https://disreputable-wizard-px65r97q6xpfrjg4-3000.app.github.dev/"
+          webok=0; pyok=0
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" -m 15 "$URL" || true)
+            case "$code" in 200|302|307|401) webok=1; echo "web up (attempt $i): $code"; break;; *) echo "web attempt $i -> $code";; esac
+            sleep 15
+          done
+          sleep 60
+          gh cs ssh -c "$CS" -- '
+            cd /workspaces/ai-studio 2>/dev/null || cd /home/z/my-project
+            echo "health: $(curl -s -m 8 http://localhost:3030/health | head -c 200)"
+            echo "local web: $(curl -s -o /dev/null -w "%{http_code}" -m 10 http://localhost:3000/)"
+            echo "--- server.log tail ---"; tail -4 data/server.log 2>/dev/null
+            echo "--- python log tail ---"; tail -3 data/face-swap-pro.log 2>/dev/null
+          '

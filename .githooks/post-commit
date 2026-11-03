@@ -1,0 +1,58 @@
+#!/bin/bash
+# ============================================================
+# post-commit hook — ANTI-REGRESSION (owner request 2026-11-01)
+#
+# The regression loop this kills:
+#   critical file deleted on disk → end-of-session auto-commit
+#   PUBLISHES the deletion → next session restores a broken tree
+#   → "المعاينة لا تعمل" / "تبديل الوجه لا يعمل" again.
+#
+# After EVERY commit: if HEAD lost a critical file, restore it from
+# the last commit that had it and immediately create a repair commit.
+# ============================================================
+cd "$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+
+CRITICAL=(
+  "src/app/api/images/upload/route.ts"
+  "src/app/api/images/face-swap/route.ts"
+  "src/app/api/images/garment-swap/route.ts"
+  "src/app/api/images/face-detect/route.ts"
+  "src/app/api/video/face-swap/route.ts"
+  "src/app/api/download-v3/route.ts"
+  "src/app/api/auth/login/route.ts"
+  "mini-services/face-swap-pro/server.py"
+  "src/lib/mini-service.ts"
+  "src/lib/security/resolve-file-path.ts"
+  "src/lib/processing-lock.ts"
+  "src/hooks/use-toast.ts"
+  "scripts/download-models.sh"
+  "package.json"
+  "next.config.ts"
+  "prisma/schema.prisma"
+)
+
+REPAIRED=0
+for f in "${CRITICAL[@]}"; do
+  if ! git cat-file -e "HEAD:$f" 2>/dev/null; then
+    # walk touching commits newest-first; pick the first that HAS the file
+    # (the newest touching commit may be the deletion itself)
+    LAST=""
+    for c in $(git rev-list --all -30 -- "$f" 2>/dev/null); do
+      if git cat-file -e "$c:$f" 2>/dev/null; then LAST="$c"; break; fi
+    done
+    if [ -n "$LAST" ]; then
+      git checkout "$LAST" -- "$f"
+      REPAIRED=$((REPAIRED + 1))
+      echo "[post-commit] critical file missing in HEAD — restored from $LAST: $f"
+    fi
+  fi
+done
+
+if [ "$REPAIRED" -gt 0 ]; then
+  git add -A
+  if ! git diff --cached --quiet; then
+    git commit -q -m "guard: restore critical files dropped by previous commit (anti-regression)"
+    echo "[post-commit] repair commit created ($REPAIRED file(s))"
+  fi
+fi
+exit 0

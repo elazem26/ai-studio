@@ -1,0 +1,42 @@
+# sync-deploy.yml — push the latest canonical code into the running Codespace
+# and restart the app there, so the PUBLIC link serves the newest version
+# (new transplant merge engine, etc.) without manual SSH.
+#
+# Runs on demand (workflow_dispatch). Safe: data/ is untracked so user data
+# survives `git reset --hard`; the canonical code lives in the repo.
+
+name: sync-deploy
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: sync-deploy
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ secrets.CS_KEEPALIVE_TOKEN }}
+      CS: disreputable-wizard-px65r97q6xpfrjg4
+      URL: https://disreputable-wizard-px65r97q6xpfrjg4-3000.app.github.dev
+    steps:
+      - name: Sync code + restart app inside the Codespace
+        run: |
+          set -e
+          REPO_DIR=$(gh cs ssh -c "$CS" -- 'for d in /home/z/my-project /workspaces/ai-studio /workspaces/*/; do [ -n "$d" ] && [ -f "${d%/}/scripts/start-production.sh" ] && printf %s "${d%/}" && break; done' 2>/dev/null | tail -1)
+          echo "repo dir: ${REPO_DIR:-NOT FOUND}"
+          if [ -z "$REPO_DIR" ]; then
+            echo "::error::repo not found inside codespace"
+            exit 1
+          fi
+          gh cs ssh -c "$CS" -- "cd '$REPO_DIR' && git fetch origin main 2>/dev/null; git reset --hard origin/main >/dev/null 2>&1; mkdir -p data; (setsid nohup bash scripts/start-production.sh > data/server.log 2>&1 < /dev/null &); sleep 3; echo synced" || true
+          for i in $(seq 1 30); do
+            sleep 10
+            code=$(curl -s -o /dev/null -w "%{http_code}" -m 15 "$URL/" || echo 000)
+            echo "probe $i -> $code"
+            case "$code" in 200|302|307|401) echo "app serving latest"; exit 0;; esac
+          done
+          echo "::warning::app not confirmed after sync"

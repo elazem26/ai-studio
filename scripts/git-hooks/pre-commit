@@ -1,0 +1,44 @@
+#!/bin/bash
+# ============================================================
+# PERMANENT anti-bloat guard (owner request 2026-10-29):
+# "اريد حل نهائي يمنع تكرار اي شيء"
+#
+# This hook runs on EVERY commit (core.hooksPath -> scripts/git-hooks)
+# and blocks anything that once made .git weigh 4.7GB:
+#   * files > 8MB            (models, tarballs, videos, bundles)
+#   * binary model weights   *.onnx *.bin *.pt *.pth *.safetensors
+#   * archives               *.zip *.tar *.tar.gz *.tgz
+#   * videos                 *.mp4 *.mov *.avi *.mkv *.webm
+#   * session/runtime paths  data/ upload/ download/ extracted/
+#   * backup junk            ai-studio-*.tar.gz *.bundle
+# App icons under public/ are small and stay allowed.
+# ============================================================
+MAX_BYTES=$((8 * 1024 * 1024))
+fail=0
+
+while IFS= read -r f; do
+  # runtime/backup paths never belong in history
+  case "$f" in
+    data/*|upload/*|download/*|extracted/*|.gh-staging/*)
+      echo "BLOCKED (runtime/backup path): $f"; fail=1; continue;;
+  esac
+  case "$f" in
+    *.onnx|*.bin|*.pt|*.pth|*.safetensors|*.zip|*.tar|*.tar.gz|*.tgz|*.mp4|*.mov|*.avi|*.mkv|*.webm|*.bundle)
+      echo "BLOCKED (binary/media extension): $f"; fail=1; continue;;
+  esac
+  if [ -f "$f" ]; then
+    size=$(stat -c%s "$f" 2>/dev/null || echo 0)
+    if [ "$size" -gt "$MAX_BYTES" ]; then
+      echo "BLOCKED (file ${size} bytes > ${MAX_BYTES}): $f"; fail=1
+    fi
+  fi
+done < <(git diff --cached --name-only --diff-filter=ACMR)
+
+if [ "$fail" -ne 0 ]; then
+  echo ""
+  echo "COMMIT REJECTED by the anti-bloat guard."
+  echo "Big binaries/models/media/backups must never enter git history."
+  echo "(They live on disk; backups are handled by scripts/end-session-protocol.ts.)"
+  exit 1
+fi
+exit 0

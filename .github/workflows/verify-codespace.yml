@@ -1,0 +1,23 @@
+# verify-codespace.yml — one-shot: print the Codespace checkout commit and
+# fingerprints of the two updated files, to prove the public link serves the
+# canonical repo code (seamless v3 transplant pipeline).
+name: verify-codespace
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: verify-codespace
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ secrets.CS_KEEPALIVE_TOKEN }}
+      CS: disreputable-wizard-px65r97q6xpfrjg4
+    steps:
+      - name: Print checkout commit + file fingerprints
+        run: |
+          gh cs ssh -c "$CS" -- 'cd /workspaces/ai-studio 2>/dev/null || cd /home/z/my-project 2>/dev/null || cd $(ls -d /workspaces/*/ | head -1); echo "commit: $(git rev-parse --short HEAD 2>/dev/null)"; git hash-object mini-services/face-swap-pro/server.py 2>/dev/null; git hash-object scripts/start-production.sh 2>/dev/null; grep -c "_hair_mask_for" mini-services/face-swap-pro/server.py 2>/dev/null; head -c 400 data/server.log 2>/dev/null; echo'

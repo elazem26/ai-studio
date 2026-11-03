@@ -1,0 +1,50 @@
+# check-codespace.yml — one-shot: restart the python face-swap service (to
+# pick up the new server.py), verify the web boot completed its rebuild, and
+# print the state of both services.
+name: check-codespace
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: check-codespace
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ secrets.CS_KEEPALIVE_TOKEN }}
+      CS: disreputable-wizard-px65r97q6xpfrjg4
+    steps:
+      - name: Restart python service + show boot state
+        run: |
+          gh cs ssh -c "$CS" -- '
+            cd /workspaces/ai-studio 2>/dev/null || cd /home/z/my-project || exit 1
+            pkill -f "face-swap-pro/serve[r].py" 2>/dev/null && echo "python service killed (will auto-respawn with new code)" || echo "python service not running"
+            echo "--- server.log tail ---"
+            tail -5 data/server.log 2>/dev/null
+            echo "--- processes ---"
+            ps aux | grep -E "standalone|face-swap" | grep -v grep | awk "{print \$11, \$12, \$13}"
+            echo "--- commit ---"
+            git rev-parse --short HEAD
+          '
+      - name: Wait for both services
+        run: |
+          URL="https://disreputable-wizard-px65r97q6xpfrjg4-3000.app.github.dev/"
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" -m 15 "$URL" || true)
+            echo "web attempt $i -> $code"
+            case "$code" in 200|302|307|401) break;; esac
+            sleep 15
+          done
+          # python service auto-respawns on first transplant/swap request;
+          # give it time to boot if it was already respawned
+          sleep 30
+          gh cs ssh -c "$CS" -- '
+            cd /workspaces/ai-studio 2>/dev/null || cd /home/z/my-project
+            curl -s -m 8 http://localhost:3030/health | head -c 300; echo
+            curl -s -o /dev/null -w "local web: %{http_code}\n" -m 10 http://localhost:3000/
+            tail -3 data/server.log 2>/dev/null
+          '

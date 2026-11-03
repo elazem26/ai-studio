@@ -1,0 +1,73 @@
+# rescue-npm.yml — one-shot: rebuild the Codespace app with npm (the Codespace
+# has node/npm, NOT bun) and boot both the web server and the python
+# face-swap service with the correct paths for the Codespace layout.
+name: rescue-npm
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: rescue-npm
+  cancel-in-progress: false
+
+jobs:
+  rescue:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      GH_TOKEN: ${{ secrets.CS_KEEPALIVE_TOKEN }}
+      CS: disreputable-wizard-px65r97q6xpfrjg4
+    steps:
+      - name: Sync code, rebuild with npm, boot services
+        run: |
+          gh cs ssh -c "$CS" -- '
+            cd /workspaces/ai-studio 2>/dev/null || cd /home/z/my-project || exit 1
+            echo "commit before: $(git rev-parse --short HEAD)"
+            git fetch origin main 2>/dev/null || true
+            git reset --hard origin/main 2>/dev/null || true
+            echo "commit after: $(git rev-parse --short HEAD)"
+            echo "node: $(node --version 2>&1) npm: $(npm --version 2>&1) python3: $(python3 --version 2>&1)"
+            # fresh production build with npm (next build + copy static assets)
+            setsid nohup bash -c "
+              cd /workspaces/ai-studio 2>/dev/null || cd /home/z/my-project
+              {
+                echo \"[rescue] npm build start \$(date)\"
+                npm run build || npx next build
+                echo \"[rescue] build done \$(date)\"
+                pkill -f \"standalone/serve[r].js\" 2>/dev/null
+                pkill -f \"next-serve[r]\" 2>/dev/null
+                sleep 2
+                set -a; . ./.env 2>/dev/null; set +a
+                export PORT=3000 HOSTNAME=0.0.0.0 NODE_ENV=production
+                setsid nohup node .next/standalone/server.js > /tmp/ai-studio-dev.log 2>&1 &
+                echo \"[rescue] web booted \$(date)\"
+              } >> data/rescue-build.log 2>&1
+            " > /dev/null 2>&1 < /dev/null &
+            echo "build+boot launched in background"
+          '
+      - name: Wait for the web app
+        run: |
+          URL="https://disreputable-wizard-px65r97q6xpfrjg4-3000.app.github.dev/"
+          for i in $(seq 1 40); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" -m 15 "$URL" || true)
+            echo "attempt $i -> $code"
+            case "$code" in 200|302|307|401)
+              # verify it is the NEW build serving (server restarted)
+              sleep 20
+              code2=$(curl -s -o /dev/null -w "%{http_code}" -m 15 "$URL" || true)
+              echo "recheck -> $code2"
+              case "$code2" in 200|302|307|401) exit 0;; esac
+              ;; esac
+            sleep 20
+          done
+          echo "::warning::web did not come up in time"
+      - name: Show rescue state
+        if: always()
+        run: |
+          gh cs ssh -c "$CS" -- '
+            cd /workspaces/ai-studio 2>/dev/null || cd /home/z/my-project
+            echo "--- rescue-build.log ---"; tail -8 data/rescue-build.log 2>/dev/null
+            echo "--- dev log ---"; tail -4 /tmp/ai-studio-dev.log 2>/dev/null
+            echo "local web: $(curl -s -o /dev/null -w "%{http_code}" -m 8 http://localhost:3000/)"
+            echo "python health: $(curl -s -m 8 http://localhost:3030/health | head -c 200)"
+          '

@@ -1,0 +1,59 @@
+# sync-codespace.yml — one-shot: force the Codespace to sync with the latest
+# repo code (git fetch + reset --hard origin/main), restart the production
+# server, and print verification fingerprints. Used after pushing updated
+# transplant/face-swap code so the public link serves the new build.
+name: sync-codespace
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: sync-codespace
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ secrets.CS_KEEPALIVE_TOKEN }}
+      CS: disreputable-wizard-px65r97q6xpfrjg4
+    steps:
+      - name: Sync code + restart app
+        run: |
+          gh cs ssh -c "$CS" -- '
+            for d in /workspaces/ai-studio /home/z/my-project $(ls -d /workspaces/*/ 2>/dev/null | head -1); do
+              [ -f "${d%/}/scripts/start-production.sh" ] && REPO_DIR="${d%/}" && break
+            done
+            echo "repo: $REPO_DIR"
+            cd "$REPO_DIR" || exit 1
+            git fetch origin main 2>/dev/null || true
+            git reset --hard origin/main 2>/dev/null || true
+            echo "codespace commit: $(git rev-parse --short HEAD)"
+            pkill -f "standalone/serve[r].js" 2>/dev/null || true
+            pkill -f "next-serve[r]" 2>/dev/null || true
+            sleep 2
+            mkdir -p data
+            setsid nohup bash scripts/start-production.sh > data/server.log 2>&1 < /dev/null &
+            echo "boot launched"
+          '
+      - name: Wait for the app to come back with the new build
+        run: |
+          URL="https://disreputable-wizard-px65r97q6xpfrjg4-3000.app.github.dev/"
+          for i in $(seq 1 24); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" -m 15 "$URL" || true)
+            echo "attempt $i -> $code"
+            case "$code" in 200|302|307|401) break;; esac
+            sleep 15
+          done
+      - name: Verify sync fingerprints
+        run: |
+          gh cs ssh -c "$CS" -- '
+            cd /workspaces/ai-studio 2>/dev/null || cd /home/z/my-project 2>/dev/null || exit 0
+            echo "commit: $(git rev-parse --short HEAD)"
+            echo "close-btn: $(grep -c "إغلاق النتيجة" src/components/transplant/transplant-panel.tsx)"
+            echo "zoom-btns: $(grep -c "ZoomIn" src/components/transplant/transplant-panel.tsx)"
+            echo "undo-redo: $(grep -c "undoResult" src/components/transplant/transplant-panel.tsx)"
+            echo "person-v4: $(grep -c "WHOLE-BODY transplant via the PROVEN HEAD PIPELINE" mini-services/face-swap-pro/server.py)"
+            echo "scroll-fix: $(grep -c "restoreScroll" src/components/transplant/transplant-panel.tsx)"
+          '

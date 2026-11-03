@@ -1,0 +1,111 @@
+# keep-alive.yml — Self-healing availability for the AI Studio public link.
+#
+# Problem: GitHub auto-stops an idle Codespace -> the public app URL goes dead
+# and the user sees an error page. Nobody is around to click "start".
+# Fix: every 15 minutes this workflow:
+#   1. Pings the public URL. ANY app answer counts as alive (200/302/307/401 —
+#      the app is auth-gated, so 401 means the app is UP and asking to log in).
+#      Only 404/502/000 mean the tunnel or app is really down.
+#   2. If UP   -> hits /api/system/ensure-services (resets the idle timer AND
+#      self-heals the python face-swap service inside via its guardian).
+#   3. If DOWN -> starts the Codespace via the REST API, re-publicizes port
+#      3000, waits for the app; if the app never binds :3000 (postStartCommand
+#      failure) it SSHes inside, AUTO-DETECTS the repo path (Codespaces checkout
+#      lives under /workspaces/<repo>, local builds under /home/z/my-project)
+#      and launches scripts/start-production.sh detached.
+#
+# NOTE: modern gh rejects `gh cs start -c X -R repo` (mutually exclusive
+# flags) — we call the REST API directly instead. The PAT (CS_KEEPALIVE_TOKEN)
+# is required because GITHUB_TOKEN cannot touch Codespaces APIs.
+
+name: keep-alive
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: keep-alive
+  cancel-in-progress: false
+
+jobs:
+  keep-alive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GH_TOKEN: ${{ secrets.CS_KEEPALIVE_TOKEN }}
+      CS: disreputable-wizard-px65r97q6xpfrjg4
+      URL: https://disreputable-wizard-px65r97q6xpfrjg4-3000.app.github.dev
+    steps:
+      - name: Check availability
+        id: probe
+        run: |
+          code=$(curl -s -o /dev/null -w "%{http_code}" -m 20 "$URL/" || true)
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "public URL answered: $code"
+
+      - name: Up -> keep awake + self-heal services
+        if: contains(fromJSON('["200","302","307","401"]'), steps.probe.outputs.code)
+        run: |
+          echo "app is up — pinging ensure-services to reset idle timer"
+          curl -s -m 60 "$URL/api/system/ensure-services" || true
+
+      - name: Down -> start Codespace via API
+        if: ${{ !contains(fromJSON('["200","302","307","401"]'), steps.probe.outputs.code) }}
+        run: |
+          set -x
+          gh api -X POST "/user/codespaces/$CS/start" >/dev/null 2>&1 || true
+          for i in $(seq 1 24); do
+            state=$(gh api "/user/codespaces/$CS" --jq '.state' 2>/dev/null || echo "?")
+            echo "state: $state"
+            [ "$state" = "Available" ] && break
+            sleep 5
+          done
+
+      - name: Wait for app / rescue via SSH if needed
+        run: |
+          alive() { case "$1" in 200|302|307|401) return 0;; *) return 1;; esac; }
+          gh cs ports visibility 3000:public -c "$CS" 2>&1 || true
+          code=$(curl -s -o /dev/null -w "%{http_code}" -m 15 "$URL/" || true)
+          echo "first probe after boot: $code"
+          if ! alive "$code"; then
+            echo "app did not come up — giving postStartCommand up to 90s..."
+            for i in $(seq 1 9); do
+              sleep 10
+              code=$(curl -s -o /dev/null -w "%{http_code}" -m 15 "$URL/" || true)
+              echo "attempt $i -> $code"
+              alive "$code" && break
+            done
+          fi
+          # Hard rescue: SSH inside and boot the app ourselves. The repo path
+          # differs between local builds (/home/z/my-project) and Codespace
+          # checkouts (/workspaces/<repo>) — auto-detect it.
+          if ! alive "$code"; then
+            echo "SSH rescue: locating repo and launching start-production.sh"
+            REPO_DIR=$(gh cs ssh -c "$CS" -- 'for d in /home/z/my-project /workspaces/ai-studio /workspaces/*/; do [ -n "$d" ] && [ -f "${d%/}/scripts/start-production.sh" ] && printf %s "${d%/}" && break; done' 2>/dev/null | tail -1)
+            echo "repo dir: ${REPO_DIR:-NOT FOUND}"
+            if [ -n "$REPO_DIR" ]; then
+              # SYNC FIRST: the checkout must serve the canonical repo code
+              # (a stale checkout is how the public link kept serving the old
+              # pasted-transplant build). fetch + reset --hard, log the new
+              # commit, THEN boot — start-production.sh re-syncs anyway and
+              # restarts any stale python face service.
+              gh cs ssh -c "$CS" -- "cd '$REPO_DIR' && (git fetch origin main 2>/dev/null || git fetch origin 2>/dev/null || true) && git reset --hard origin/main 2>/dev/null || true; echo 'codespace commit:' \$(git rev-parse --short HEAD 2>/dev/null); mkdir -p data && (setsid nohup bash scripts/start-production.sh > data/server.log 2>&1 < /dev/null &); sleep 2; echo rescued" || true
+            else
+              echo "::warning::repo dir not found inside codespace"
+            fi
+            for i in $(seq 1 24); do
+              sleep 10
+              code=$(curl -s -o /dev/null -w "%{http_code}" -m 15 "$URL/" || true)
+              echo "rescue attempt $i -> $code"
+              alive "$code" && break
+            done
+          fi
+          gh cs ports visibility 3000:public -c "$CS" 2>&1 || true
+          curl -s -m 60 "$URL/api/system/ensure-services" || true
+          code=$(curl -s -o /dev/null -w "%{http_code}" -m 15 "$URL/" || true)
+          echo "final status: $code"
+          if ! alive "$code"; then
+            echo "::warning::app still not answering after restart attempt"
+          fi

@@ -1,0 +1,195 @@
+// AI Clothing Studio - Local Virtual Try-On
+// Privacy-first: only metadata stored locally. Images stored on filesystem only.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/// Local application settings (key-value store).
+model Setting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+/// AI models registered in the Model Manager.
+/// Status: "not_installed" | "installing" | "installed" | "active" | "error"
+model AIModel {
+  id              String   @id @default(cuid())
+  name            String   @unique
+  displayName     String
+  version         String
+  sizeGB          Float
+  vramRequiredGB  Int
+  ramRequiredGB   Int      @default(8)
+  category        String   @default("virtual_tryon") // virtual_tryon | upscaler | segmentation | pose
+  huggingfaceRepo String?
+  license         String   @default("open")
+  isActive        Boolean  @default(false)
+  status          String   @default("not_installed")
+  installedPath   String?
+  installedAt     DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+/// Saved project sessions (no image bytes — only references).
+model Project {
+  id           String   @id @default(cuid())
+  name         String
+  sourcePath   String
+  garmentPath  String
+  settingsJson String   // serialized generation settings
+  seedUsed     BigInt?
+  modelUsed    String?
+  resultIds    String   // comma-separated list of Result IDs
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+/// Generated result metadata (image bytes live on disk only).
+model Result {
+  id           String   @id @default(cuid())
+  projectId    String?
+  sourcePath   String
+  garmentPath  String
+  resultPath   String
+  thumbnailPath String?
+  width        Int
+  height       Int
+  seed         BigInt
+  modelUsed    String
+  generationMs Int
+  qualityScore Float?
+  settingsJson String?
+  createdAt    DateTime @default(now())
+
+  @@index([projectId])
+}
+
+/// Lightweight local activity log. Never stores image bytes or PII.
+model LogEntry {
+  id        Int      @id @default(autoincrement())
+  level     String   // info | warn | error | debug
+  category  String   // tryon | upload | security | system | model | export
+  message   String
+  details   String?
+  durationMs Int?
+  modelUsed String?
+  gpuInfo   String?
+  vramMB    Int?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([category])
+}
+
+// ============================================================
+// AUTH & SUBSCRIPTION SYSTEM
+// ============================================================
+
+/// User accounts — email or phone based registration.
+model User {
+  id            String   @id @default(cuid())
+  email         String?  @unique
+  phone         String?  @unique
+  name          String?
+  passwordHash  String
+  role          String   @default("user") // admin | user | assistant
+  isOwner       Boolean  @default(false)  // true = lifetime unlimited
+  isSuspended   Boolean  @default(false)
+  otpCode       String?
+  otpExpiresAt  DateTime?
+  isVerified    Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  subscription  Subscription?
+  assistants    Assistant[]
+  permissions   Permission[]
+}
+
+model Subscription {
+  id           String    @id @default(cuid())
+  userId       String    @unique
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan         String    // trial | welcome | monthly | semiannual | annual
+  status       String    @default("active")
+  priceUSD     Float     @default(0)
+  startedAt    DateTime  @default(now())
+  expiresAt    DateTime
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+}
+
+model Assistant {
+  id           String    @id @default(cuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  managedBy    String
+  name         String
+  status       String    @default("active")
+  expiresAt    DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  permissions  Permission[]
+}
+
+model Permission {
+  id           String    @id @default(cuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assistantId  String?
+  assistant    Assistant? @relation(fields: [assistantId], references: [id], onDelete: Cascade)
+  key          String
+  value        Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+}
+
+model UsageStat {
+  id           String   @id @default(cuid())
+  serviceKey   String
+  date         String
+  sessionCount Int      @default(0)
+  totalMs      Int      @default(0)
+  successCount Int      @default(0)
+  errorCount   Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([serviceKey, date])
+  @@index([serviceKey])
+}
+
+model Report {
+  id           String   @id @default(cuid())
+  type         String   @default("daily")
+  title        String
+  summary      String
+  body         String
+  metricsJson  String
+  createdAt    DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([type])
+}
+
+model AdminCommandLog {
+  id           String   @id @default(cuid())
+  adminId      String
+  rawCommand   String
+  parsedJson   String
+  action       String
+  result       String   @default("")
+  success      Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  @@index([adminId])
+  @@index([createdAt])
+}

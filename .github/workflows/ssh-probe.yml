@@ -1,0 +1,40 @@
+# ssh-probe.yml — one-shot deep probe INSIDE the Codespace: memory, processes,
+# OOM evidence, server log tail. Diagnoses the 401↔000 restart cycle.
+name: ssh-probe
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ssh-probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ secrets.CS_KEEPALIVE_TOKEN }}
+      CS: disreputable-wizard-px65r97q6xpfrjg4
+    steps:
+      - name: Probe processes and memory
+        run: |
+          gh cs ssh -c "$CS" -- 'bash -s' <<'EOF'
+          echo "===== MEM ====="
+          free -g
+          echo "===== TOP RSS PROCESSES ====="
+          ps aux --sort=-rss | head -12
+          echo "===== OOM EVIDENCE ====="
+          (dmesg 2>/dev/null || journalctl -k --no-pager 2>/dev/null || grep -i 'killed process' /var/log/kern.log 2>/dev/null) | grep -i 'oom\|killed process' | tail -6
+          echo "===== WEB/3000 + PY/3030 ====="
+          echo "3000: $(curl -s -o /dev/null -w '%{http_code}' -m 4 http://localhost:3000/)"
+          echo "3030: $(curl -s -m 3 http://localhost:3030/health | head -c 100)"
+          echo "===== SERVER.LOG TAIL ====="
+          cd /workspaces/ai-studio 2>/dev/null || cd /home/z/my-project
+          tail -c 2000 data/server.log 2>/dev/null | tail -20
+          echo "===== GUARDIAN LOG ====="
+          tail -c 600 data/guardian-state.json 2>/dev/null
+          echo ""
+          echo "===== LAST BOOT ACTIONS ====="
+          ps -eo pid,etime,cmd | grep -E 'start-production|next build|bun|server.py|guardian' | grep -v grep | head -10
+          EOF

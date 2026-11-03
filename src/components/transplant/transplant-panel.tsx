@@ -251,13 +251,13 @@ export function TransplantPanel() {
     }
   };
 
-  // زوم النتيجة بعجلة الفأرة — نفس سلوك صفحة أدوات الصور
+  // زوم النتيجة بعجلة الفأرة — نفس سلوك صفحة تبديل الوجوه (1%–5000%)
   useEffect(() => {
     const el = resultBoxRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      setZoom((z) => Math.max(1, Math.min(10, z * (e.deltaY > 0 ? 0.9 : 1.1))));
+      setZoom((z) => Math.min(50, Math.max(0.01, z * (e.deltaY > 0 ? 0.9 : 1.1))));
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
@@ -882,10 +882,10 @@ export function TransplantPanel() {
               <span className="text-xs">تقدّم</span>
             </Button>
             <span className="mx-1 h-5 w-px bg-border/60" />
-            <Button size="sm" variant="outline" className="h-8 w-8 p-0" disabled={zoom <= 1} onClick={() => setZoom((z) => Math.max(1, z * 0.9))} title="تصغير">
+            <Button size="sm" variant="outline" className="h-8 w-8 p-0" disabled={zoom <= 0.011} onClick={() => setZoom((z) => Math.max(0.01, z * 0.8))} title="تصغير">
               <ZoomOut className="w-3.5 h-3.5" />
             </Button>
-            <Button size="sm" variant="outline" className="h-8 w-8 p-0" disabled={zoom >= 10} onClick={() => setZoom((z) => Math.min(10, z * 1.1))} title="تكبير">
+            <Button size="sm" variant="outline" className="h-8 w-8 p-0" disabled={zoom >= 50} onClick={() => setZoom((z) => Math.min(50, z * 1.25))} title="تكبير">
               <ZoomIn className="w-3.5 h-3.5" />
             </Button>
             <Button size="sm" variant="outline" className="h-8 w-8 p-0" disabled={zoom === 1} onClick={() => setZoom(1)} title="إعادة الضبط">

@@ -524,22 +524,30 @@ def _feather_mask(w, h, feather=21, shrink=0.90):
     return cv2.GaussianBlur(mask, (k, k), 0)
 
 
-def _match_color_laba(region_ref, region_tgt, strength=0.55):
+def _match_color_laba(region_ref, region_tgt, strength=0.55, mask=None):
     """Per-channel LAB mean/std transfer: shift region_tgt toward region_ref.
 
     region_ref = the SAME area BEFORE the swap (carries the scene's lighting
     on skin); region_tgt = after the swap. std ratio is capped to avoid
     halos. strength<1 keeps some of the new face's own color character.
+    mask (optional): uint8 0/255, same size as the regions — when given the
+    statistics come ONLY from that area (e.g. an inner skin ellipse) so
+    hair/background pixels cannot bias the transfer.
     """
     import numpy as np
     import cv2
     a = cv2.cvtColor(region_ref, cv2.COLOR_BGR2LAB).astype(np.float32)
     b = cv2.cvtColor(region_tgt, cv2.COLOR_BGR2LAB).astype(np.float32)
     out = b.copy()
+    sel = (mask > 127) if mask is not None else None
     for c in range(3):
-        ma, sa = float(a[..., c].mean()), float(a[..., c].std()) + 1e-6
-        mb, sb = float(b[..., c].mean()), float(b[..., c].std()) + 1e-6
-        ratio = min(sb / sa, 1.6)  # cap: never blow contrast past 1.6x
+        if sel is not None and int(sel.sum()) > 50:
+            ma, sa = float(a[..., c][sel].mean()), float(a[..., c][sel].std()) + 1e-6
+            mb, sb = float(b[..., c][sel].mean()), float(b[..., c][sel].std()) + 1e-6
+        else:
+            ma, sa = float(a[..., c].mean()), float(a[..., c].std()) + 1e-6
+            mb, sb = float(b[..., c].mean()), float(b[..., c].std()) + 1e-6
+        ratio = min(sb / sa, 1.25)  # cap: never blow contrast past 1.25x
         out[..., c] = (b[..., c] - mb) * ratio + ma
     blended = b * (1.0 - strength) + out * strength
     return cv2.cvtColor(np.clip(blended, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
@@ -556,10 +564,22 @@ def _enhance_face(result, before, bbox_px, feather=21):
     """Enhance ONE swapped face region in-place (returns the image).
 
     result : image AFTER the swap
-    before : the SAME image BEFORE this swap (reference for scene color)
+    before : the SAME image BEFORE this swap (reference for scene color).
+             MUST be a true pre-swap COPY — inswapper paste_back mutates
+             the array in place, so passing the same object makes the
+             transfer compare the face with itself (a no-op).
     bbox_px: (x1, y1, x2, y2) pixel bbox of the swapped face
+
+    v2 — fixes the 'grainy dark ghost' look on strong scene-mismatch:
+      • LAB stats from an inner SKIN ellipse — hair/background no longer
+        bias the transfer
+      • gentler strength (0.35) + luminance-gap damping — a pale face on
+        a dark scene shifts smoothly instead of turning muddy
+      • bilateral denoise BEFORE a mild unsharp — the 128px model's
+        upscale grain is smoothed, not amplified
     """
     import numpy as np
+    import cv2
     h, w = before.shape[:2]
     x1, y1, x2, y2 = [int(v) for v in bbox_px]
     pw, ph = max(4, x2 - x1), max(4, y2 - y1)
@@ -573,13 +593,93 @@ def _enhance_face(result, before, bbox_px, feather=21):
     ref = before[ey1:ey2, ex1:ex2]
     if tgt.size == 0 or ref.size == 0:
         return result
-    adj = _match_color_laba(ref, tgt, strength=0.55)
-    adj = _unsharp(adj)
-    m = _feather_mask(adj.shape[1], adj.shape[0], feather=feather)
+    # inner skin ellipse for the statistics (~58% of the region)
+    skin = np.zeros(tgt.shape[:2], np.uint8)
+    cv2.ellipse(
+        skin,
+        (tgt.shape[1] // 2, tgt.shape[0] // 2),
+        (max(2, int(tgt.shape[1] * 0.29)), max(2, int(tgt.shape[0] * 0.29))),
+        0, 0, 360, 255, -1,
+    )
+    strength = 0.30
+    try:
+        lr = cv2.cvtColor(ref, cv2.COLOR_BGR2LAB)[..., 0]
+        lt = cv2.cvtColor(tgt, cv2.COLOR_BGR2LAB)[..., 0]
+        gap = abs(float(lr[skin > 127].mean()) - float(lt[skin > 127].mean()))
+        if gap > 25:
+            strength *= 0.5   # big exposure mismatch — damp the shift hard
+    except Exception:
+        pass
+    adj = _match_color_laba(ref, tgt, strength=strength, mask=skin)
+    try:
+        adj = cv2.bilateralFilter(adj, 5, 40, 5)   # kill upscale grain
+    except Exception:
+        pass
+    adj = _unsharp(adj, amount=0.22, radius=1.6)   # mild crispness only
+    # CLAMP the luminance shift: the swap must keep the new identity's own
+    # natural exposure — matching a pale face to a dark scene (or the
+    # reverse) never helps; the paste-back already carries scene light.
+    try:
+        shifted = cv2.cvtColor(adj, cv2.COLOR_BGR2LAB)[..., 0].astype(np.float32)
+        orig = cv2.cvtColor(tgt, cv2.COLOR_BGR2LAB)[..., 0].astype(np.float32)
+        dl = np.clip(shifted - orig, -14.0, 14.0)
+        lab = cv2.cvtColor(adj, cv2.COLOR_BGR2LAB).astype(np.float32)
+        lab[..., 0] = np.clip(orig + dl, 0, 255)
+        adj = cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
+    except Exception:
+        pass
+    # INNER-face feather mask (0.62 of the bbox): the old 0.90 covered hair
+    # and background around the face and painted a dark veil over them.
+    m = _feather_mask(adj.shape[1], adj.shape[0], feather=feather, shrink=0.62)
     a = (m.astype(np.float32) / 255.0)[..., None]
     blended = tgt.astype(np.float32) * (1 - a) + adj.astype(np.float32) * a
     result[ey1:ey2, ex1:ex2] = np.clip(blended, 0, 255).astype(np.uint8)
     return result
+
+
+def _swap_with_strength(result, tgt_face, id_face, max_extra=2):
+    """inswapper swap with a MANDATORY strengthening pass.
+
+    inswapper_128 sometimes renders the requested identity only WEAKLY —
+    a semi-transparent ghost of the original face stays visible (seen
+    when the target/source scene gap is big: dark↔bright, heavy beard,
+    strong expression). The nasty part: the ghost's embedding is already
+    VERY close to the requested identity (0.81 vs 0.06 measured), so an
+    embedding check alone can NOT tell a ghost from a full render.
+
+    Fix (verified visually on both directions): ALWAYS apply a second
+    pass — pass 2 turns the ghost into a full render, and on an already
+    clean swap it merely re-renders the same identity (no harm). A third
+    pass runs only when the embedding still leans toward the original
+    face. Returns the strengthened image.
+    """
+    import numpy as np
+    out = SWAPPER.get(result, tgt_face, id_face, paste_back=True)
+    try:
+        e_id = np.asarray(id_face.normed_embedding, dtype=np.float32).flatten()
+        e_tgt = np.asarray(tgt_face.normed_embedding, dtype=np.float32).flatten()
+        bx = np.asarray(tgt_face.bbox).flatten()
+        for attempt in range(max_extra):
+            res_faces, _, _ = _detect_sorted(out, hq=True)
+            if not res_faces:
+                break
+            best = min(
+                res_faces,
+                key=lambda f: abs(f.bbox[0] - bx[0]) + abs(f.bbox[1] - bx[1]),
+            )
+            e_res = np.asarray(best.normed_embedding, dtype=np.float32).flatten()
+            s_id = float(np.dot(e_res, e_id))
+            s_tgt = float(np.dot(e_res, e_tgt))
+            print(f"[SWAPGUARD] attempt={attempt} s_identity={s_id:.3f} s_target={s_tgt:.3f}", flush=True)
+            # pass 2 is MANDATORY (ghost fix); pass 3 only when the face
+            # still leans toward the ORIGINAL identity
+            if attempt > 0 and s_id >= s_tgt:
+                break
+            out = SWAPPER.get(out, best, id_face, paste_back=True)
+            print("[SWAPGUARD] strengthening pass applied", flush=True)
+    except Exception:
+        traceback.print_exc()
+    return out
 
 
 def _clean_index(v, name, count):
@@ -782,12 +882,14 @@ async def swap(req: Request):
 
         result = src
         for m in plan:
-            before = result
-            result = SWAPPER.get(
+            # TRUE pre-swap snapshot: paste_back mutates the array in place,
+            # so without .copy() the color reference would equal the result
+            # and the enhancement pass would compare the face with itself.
+            before = result.copy()
+            result = _swap_with_strength(
                 result,
                 src_faces[m["sourceIndex"]],
                 face_faces[m["faceIndex"]],
-                paste_back=True,
             )
             # QUALITY PASS: color-match + sharpen the swapped face only
             try:
@@ -1335,6 +1437,50 @@ def _grabcut_subject(img, rect=None, iters=4):
     return cut, cm
 
 
+def _match_light_ramp(cut, ref_region, mask, strength=0.6):
+    """Match the LIGHT DIRECTION: apply the reference region's luminance
+    gradient (a linear L-plane fit) to the cutout.
+
+    Color statistics alone can not align SHADOWS — a chest transplanted
+    from a flat-lit photo into a side-lit photo keeps its own flat shading
+    and reads as a separate image. Fitting a plane to the destination's L
+    and adding the same (damped, zero-mean) ramp transfers the light
+    direction feel onto the transplant.
+    """
+    import numpy as np
+    import cv2
+    try:
+        if cut.size == 0 or ref_region.size == 0 or mask is None or mask.max() < 10:
+            return cut
+        if ref_region.shape[:2] != cut.shape[:2]:
+            ref_region = cv2.resize(ref_region, (cut.shape[1], cut.shape[0]))
+        if mask.shape[:2] != cut.shape[:2]:
+            mask = cv2.resize(mask, (cut.shape[1], cut.shape[0]))
+        rl = cv2.cvtColor(ref_region, cv2.COLOR_BGR2LAB)[..., 0].astype(np.float32)
+        msel = mask > 100
+        if int(msel.sum()) < 200:
+            return cut
+        ys, xs = np.where(msel)
+        A = np.stack([np.ones_like(xs, np.float32),
+                      xs.astype(np.float32), ys.astype(np.float32)], axis=1)
+        b = rl[msel]
+        sol, *_ = np.linalg.lstsq(A, b, rcond=None)
+        h, w = cut.shape[:2]
+        gx, gy = np.meshgrid(np.arange(w, dtype=np.float32),
+                             np.arange(h, dtype=np.float32))
+        ramp = sol[1] * gx + sol[2] * gy
+        ramp -= float(ramp[msel].mean())          # zero-mean: no global shift
+        amp = float(np.abs(ramp).max())
+        if amp < 1.0:
+            return cut                             # destination light is flat
+        ramp = ramp / amp * min(amp, 12.0) * strength
+        lab = cv2.cvtColor(cut, cv2.COLOR_BGR2LAB).astype(np.float32)
+        lab[..., 0] = np.clip(lab[..., 0] + ramp, 0, 255)
+        return cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
+    except Exception:
+        return cut
+
+
 def _match_color_to(img_cut, img_context, mask=None, strength=0.6):
     """Shift the cutout's color stats toward the destination scene.
 
@@ -1527,15 +1673,21 @@ def _pyramid_blend(base, top, mask, levels=6):
 
 
 def _blend_onto(dst, cut, mask, box, color_strength=0.6, context_pad=0.5,
-                pad_frac=0.8, levels=6, guard=None):
+                pad_frac=0.8, levels=6, guard=None, color_ref=None):
     """Scale `cut`/`mask` into `box`=(x,y,w,h) on dst and HARMONIZE it.
 
     The "one whole image" pipeline (no visible part boundary):
       1. resize + generous feathering of the mask
-      2. LAB color transfer toward the ring AROUND the box (excluded box)
+      2. LAB color transfer toward the reference — `color_ref` (the
+         DESTINATION region the part replaces, carrying its exact
+         lighting/color/shadows) when given, else the ring AROUND the box
       3. luminance histogram match — inherits scene exposure/lighting
-      4. sensor-grain matching — same camera noise feel everywhere
-      5. Laplacian-pyramid blending — low frequencies bleed wide, edges
+      4. light-direction ramp — the destination's L-gradient transfers
+         onto the transplant so shadows agree (no "flat pasted slab")
+      5. anti-desaturation — the transplant keeps its own chroma energy
+         (ring/histogram matches used to wash the colors out)
+      6. sensor-grain matching — same camera noise feel everywhere
+      7. Laplacian-pyramid blending — low frequencies bleed wide, edges
          stay sharp → no seam, no cutout look
 
     guard: full-size (H,W) 0..255 mask in DESTINATION coordinates — the
@@ -1583,8 +1735,37 @@ def _blend_onto(dst, cut, mask, box, color_strength=0.6, context_pad=0.5,
         ring_s[ry0:ry0 + bh, rx0:rx0 + bw] = fill
 
     orig_cut = cut_r.copy()
-    cut_r = _match_color_to(cut_r, ring_s, mask=mask_r, strength=color_strength)
-    cut_r = _match_lighting_to(cut_r, ring_s, mask_r, strength=color_strength)
+    # color reference: the DESTINATION region the part replaces (exact
+    # scene light/color) when provided, else the ring around the box
+    ref_img = ring_s
+    if color_ref is not None:
+        try:
+            if color_ref.shape[:2] != (bh, bw):
+                color_ref = cv2.resize(color_ref, (bw, bh), interpolation=cv2.INTER_AREA)
+            if color_ref.size and color_ref.mean() > 1:
+                ref_img = color_ref
+        except Exception:
+            ref_img = ring_s
+    cut_r = _match_color_to(cut_r, ref_img, mask=mask_r, strength=color_strength)
+    cut_r = _match_lighting_to(cut_r, ref_img, mask_r, strength=color_strength)
+    cut_r = _match_light_ramp(cut_r, ref_img, mask_r, strength=0.6)
+    # ANTI-DESATURATION: the color/histogram matches toward a mixed or
+    # neutral reference wash the transplant's colors out (the "faded
+    # pasted slab" look). Restore the crop's own chroma energy (±25%).
+    try:
+        mo = mask_r > 100
+        if int(mo.sum()) > 100:
+            lab_o = cv2.cvtColor(orig_cut, cv2.COLOR_BGR2LAB).astype(np.float32)
+            lab_m = cv2.cvtColor(cut_r, cv2.COLOR_BGR2LAB).astype(np.float32)
+            for c in (1, 2):
+                so = float(lab_o[..., c][mo].std()) + 1e-6
+                sm = float(lab_m[..., c][mo].std()) + 1e-6
+                gain = min(1.25, max(0.85, so / sm))
+                lab_m[..., c] = 128.0 + (lab_m[..., c] - 128.0) * gain
+            cut_r = cv2.cvtColor(np.clip(lab_m, 0, 255).astype(np.uint8),
+                                 cv2.COLOR_LAB2BGR)
+    except Exception:
+        pass
     # restore the fine detail (skin texture, hair strands, shading) that
     # global harmonization tends to flatten
     fine = orig_cut.astype(np.float32) - cv2.GaussianBlur(orig_cut, (0, 0), 4.0).astype(np.float32)
@@ -2107,6 +2288,17 @@ def _transplant_impl(body: dict):
                     target = ((SW - bw_) // 2, (SH - bh_) // 2, bw_, bh_)
 
             # ---- إزالة الجزء القديم من المصدر (يمنع «صورة فوق صورة») ----
+            # DESTINATION COLOR REF: the source's OWN region being replaced,
+            # captured BEFORE the erase — it carries the scene's exact
+            # light/color/temperature so the transplant can adopt them.
+            dest_ref = None
+            try:
+                dx0, dy0 = max(0, int(target[0])), max(0, int(target[1]))
+                dx1, dy1 = min(SW, int(target[0] + target[2])), min(SH, int(target[1] + target[3]))
+                if dx1 - dx0 > 24 and dy1 - dy0 > 24:
+                    dest_ref = src[dy0:dy1, dx0:dx1].copy()
+            except Exception:
+                dest_ref = None
             erase = body.get("erase")
             if erase is None:
                 erase = (part in R.BODY_PARTS and bool(faces_src_c) and bool(faces_ref_c))
@@ -2153,7 +2345,8 @@ def _transplant_impl(body: dict):
                     traceback.print_exc()
 
             result = _blend_onto(src, crop_i, crop_m, target,
-                                 color_strength=color_strength, guard=guard)
+                                 color_strength=color_strength, guard=guard,
+                                 color_ref=dest_ref)
 
         # ---------------- HEAD mode ----------------
         elif mode == "head":
@@ -2192,8 +2385,13 @@ def _transplant_impl(body: dict):
             import cv2
 
             # ---- STEP 1: seamless face-core swap (paste_back=True) ----
-            before = src
-            core = SWAPPER.get(src, fs, fr, paste_back=True)
+            before = src.copy()   # true pre-swap snapshot (paste_back mutates)
+            core = _swap_with_strength(src, fs, fr)
+            if body.get("debug"):
+                try:
+                    cv2.imwrite("/tmp/dbg_core0.png", core)
+                except Exception:
+                    pass
             try:
                 b = np.asarray(fs.bbox).flatten()
                 core = _enhance_face(core, before,
@@ -2490,6 +2688,86 @@ def _transplant_impl(body: dict):
                     if 0 <= j < RH:
                         band[j, :] = np.minimum(band[j, :], wgt)
                 region_mask = cv2.multiply(m_full, band, scale=1.0 / 255.0)
+                if region in ("chest", "torso") and faces_ref:
+                    # TORSO CORE COLUMN: chest/torso transplants must take the
+                    # CENTRAL chest area only. The full-width band also catches
+                    # the reference's long HAIR hanging beside the face —
+                    # blonde strands pasted over the destination chest read
+                    # as garbage. Limit to ±0.85×face-width around the face
+                    # center (shoulder core), with soft edges.
+                    _f = faces_ref[min(ref_idx, len(faces_ref) - 1)]
+                    _fx1, _fy1, _fx2, _fy2 = _face_rect(_f)
+                    _fcx = (_fx1 + _fx2) / 2.0
+                    _fw = max(4, _fx2 - _fx1)
+                    half = 0.85 * _fw
+                    col = np.zeros((RH, RW), np.float32)
+                    cx1 = max(0, int(_fcx - half))
+                    cx2 = min(RW, int(_fcx + half))
+                    col[:, cx1:cx2] = 1.0
+                    edge = max(2, int(0.18 * half))
+                    if cx1 - edge >= 0:
+                        for i in range(edge):
+                            wgt = (i + 1) / (edge + 1)
+                            if cx1 + i < RW:
+                                col[:, cx1 + i] = np.minimum(col[:, cx1 + i], wgt)
+                            j = cx1 - 1 - i
+                            if j >= 0:
+                                col[:, j] = np.minimum(col[:, j], wgt)
+                    if cx2 + edge <= RW:
+                        for i in range(edge):
+                            wgt = (i + 1) / (edge + 1)
+                            j = cx2 - 1 - i
+                            if j >= 0:
+                                col[:, j] = np.minimum(col[:, j], wgt)
+                            if cx2 + i < RW:
+                                col[:, cx2 + i] = np.minimum(col[:, cx2 + i], wgt)
+                    col8 = (col * 255).astype(np.uint8)
+                    region_mask = (region_mask.astype(np.float32) *
+                                   (col8.astype(np.float32) / 255.0)).astype(np.uint8)
+                    # HAIR EXCLUSION: long hair drapes IN FRONT of the chest —
+                    # inside any central column. Sample the reference's own
+                    # hair color from the band ABOVE the face (pure hair) and
+                    # drop matching pixels from the chest mask (LAB distance).
+                    try:
+                        hy1 = max(0, int(_fy1 - 0.75 * _fw))
+                        hy2 = max(0, int(_fy1 - 0.05 * _fw))
+                        hx1 = max(0, int(_fx1 - 0.45 * _fw))
+                        hx2 = min(RW, int(_fx2 + 0.45 * _fw))
+                        if hy2 - hy1 > 8 and hx2 - hx1 > 8:
+                            hs = np.zeros((RH, RW), np.uint8)
+                            cv2.rectangle(hs, (hx1, hy1), (hx2, hy2), 255, -1)
+                            # NOTE: top-of-head band ONLY. Side/top multi-mode
+                            # sampling (shadowed hair + shirt) collapses the
+                            # z-distance metric — shadowed hair shares LAB
+                            # with tan skin, over-removal empties the mask.
+                            hair_px_m = cv2.bitwise_and(m_full, hs)
+                            hair_sel = hair_px_m > 120
+                            if int(hair_sel.sum()) > 300:
+                                import numpy as _np
+                                hair_lab = cv2.cvtColor(ref, cv2.COLOR_BGR2LAB).astype(_np.float32)
+                                hm_ = hair_lab[hair_sel]
+                                mu = hm_.mean(0)
+                                # CLIPPED z-score: channels with tiny std (a/b
+                                # of blonde hair) blow up a raw normalized
+                                # distance — clip each z to 3 and threshold the
+                                # squared sum. thr=9 verified visually: catches
+                                # the hair drapes, spares neck shadow/skin.
+                                sd = _np.maximum(hm_.std(0), 3.0)
+                                reg_lab = cv2.cvtColor(ref, cv2.COLOR_BGR2LAB).astype(_np.float32)
+                                z = _np.abs(reg_lab - mu.reshape(1, 1, 3)) / sd.reshape(1, 1, 3)
+                                d = (_np.clip(z, 0, 3) ** 2).sum(axis=2)
+                                hair_like = ((d < 9.0) & (region_mask > 40)).astype(_np.uint8) * 255
+                                hair_like = cv2.morphologyEx(
+                                    hair_like, cv2.MORPH_CLOSE,
+                                    cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9)))
+                                hair_like = cv2.dilate(
+                                    hair_like,
+                                    cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
+                                region_mask = (region_mask.astype(_np.float32) *
+                                               (1.0 - hair_like.astype(_np.float32) / 255.0)
+                                               ).astype(_np.uint8)
+                    except Exception:
+                        traceback.print_exc()
                 if region == "hair" and faces_ref:
                     # keep the REF FACE out of the hair crop — otherwise the
                     # ref's forehead/eyes land on the source face (double face)
@@ -2529,6 +2807,18 @@ def _transplant_impl(body: dict):
                 # the transplant (the "image pasted over image" look).
                 # hair/face excluded: erasing near the head risks eating the
                 # source face; the pasted band covers those areas anyway.
+                # DESTINATION COLOR REF: captured BEFORE the erase — the
+                # source's own chest/limbs carry the scene's exact light,
+                # color temperature and shadow direction; the transplant
+                # adopts them instead of matching a mixed background ring.
+                dest_ref = None
+                try:
+                    dx0, dy0 = max(0, int(bx)), max(0, int(by))
+                    dx1, dy1 = min(SW, int(bx + bw)), min(SH, int(by + bh))
+                    if dx1 - dx0 > 24 and dy1 - dy0 > 24:
+                        dest_ref = src[dy0:dy1, dx0:dx1].copy()
+                except Exception:
+                    dest_ref = None
                 if region not in ("face", "hair"):
                     try:
                         s_subj = _subject_mask_full(src, None)
@@ -2550,7 +2840,8 @@ def _transplant_impl(body: dict):
                                     src = cv2.inpaint(src, erase, 9, cv2.INPAINT_TELEA)
                     except Exception:
                         traceback.print_exc()
-                result = _blend_onto(src, crop_i, crop_m, (bx, by, bw, bh), color_strength=color_strength)
+                result = _blend_onto(src, crop_i, crop_m, (bx, by, bw, bh), color_strength=color_strength,
+                                     color_ref=dest_ref)
                 if s_src < 1.0:
                     result = cv2.resize(result, (int(SW / s_src), int(SH / s_src)), interpolation=cv2.INTER_LANCZOS4)
                 return {"ok": True, "result": _encode_png(result), "mode": mode, "region": region}
@@ -2584,8 +2875,8 @@ def _transplant_impl(body: dict):
                 fr_p = faces_ref[min(ref_idx, len(faces_ref) - 1)]
 
                 # ---- STEP 1: seamless identity core (same as head STEP 1) --
-                before = src
-                core = SWAPPER.get(src, fs_p, fr_p, paste_back=True)
+                before = src.copy()   # true pre-swap snapshot (paste_back mutates)
+                core = _swap_with_strength(src, fs_p, fr_p)
                 try:
                     b = np.asarray(fs_p.bbox).flatten()
                     core = _enhance_face(core, before,

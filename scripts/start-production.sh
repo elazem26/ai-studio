@@ -42,7 +42,19 @@ done
 
 if [ "$STALE" = "1" ]; then
   echo "[start-production] building production bundle…"
-  bun run build || exit 1
+  # bun exists in the Z.ai sandbox but NOT in Codespaces (javascript-node
+  # devcontainer). `npx next build` + `node server.js` are the universal
+  # path — the standalone server runs identically under node.
+  if command -v bun >/dev/null 2>&1; then
+    bun run build || exit 1
+  else
+    if [ ! -d node_modules ] || [ ! -x node_modules/.bin/next ]; then
+      echo "[start-production] node_modules missing — npm install…"
+      npm install --no-audit --no-fund || exit 1
+      npx --yes prisma generate >/dev/null 2>&1 || true
+    fi
+    npx next build || exit 1
+  fi
 fi
 
 # ---- 3. standalone needs static assets copied next to server.js ----
@@ -50,4 +62,8 @@ fi
 [ -d .next/standalone/public ] || cp -r public .next/standalone/public
 
 echo "[start-production] launching standalone server on :3000"
-exec bun .next/standalone/server.js
+if command -v bun >/dev/null 2>&1; then
+  exec bun .next/standalone/server.js
+else
+  exec node .next/standalone/server.js
+fi

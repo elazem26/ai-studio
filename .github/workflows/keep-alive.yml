@@ -48,8 +48,10 @@ jobs:
       - name: Up -> keep awake + self-heal services
         if: contains(fromJSON('["200","302","307","401"]'), steps.probe.outputs.code)
         run: |
-          echo "app is up — pinging ensure-services to reset idle timer"
-          curl -s -m 60 "$URL/api/system/ensure-services" || true
+          echo "pinging ensure-services INTERNALLY (external 401 may be GitHub's port wall, not the app)"
+          # Internal hit: resets the app's own state AND wakes the python
+          # service via its guardian — only when the app truly answers.
+          gh cs ssh -c "$CS" -- 'curl -s -m 60 http://localhost:3000/api/system/ensure-services | head -c 200; echo' 2>/dev/null || echo "(app not answering internally — rescue step will handle it)"
 
       - name: Down -> start Codespace via API
         if: ${{ !contains(fromJSON('["200","302","307","401"]'), steps.probe.outputs.code) }}
@@ -66,15 +68,21 @@ jobs:
       - name: Wait for app / rescue via SSH if needed
         run: |
           alive() { case "$1" in 200|302|307|401) return 0;; *) return 1;; esac; }
-          gh cs ports visibility 3000:public -c "$CS" 2>&1 || true
-          code=$(curl -s -o /dev/null -w "%{http_code}" -m 15 "$URL/" || true)
-          echo "first probe after boot: $code"
+          # TRUTH SOURCE = INTERNAL probe. The external URL lies in both
+          # directions: GitHub's port-auth wall answers 401 even when nothing
+          # listens inside (private/unforwarded port), and some paths give
+          # 502 from runner networks. Only localhost:3000 inside the
+          # Codespace tells whether OUR server is really up.
+          internal() {
+            gh cs ssh -c "$CS" -- 'curl -s -o /dev/null -w "%{http_code}" -m 6 http://localhost:3000/login 2>/dev/null' 2>/dev/null | tail -1
+          }
+          code=$(internal); echo "internal probe: $code"
           if ! alive "$code"; then
             echo "app did not come up — giving postStartCommand up to 90s..."
             for i in $(seq 1 9); do
               sleep 10
-              code=$(curl -s -o /dev/null -w "%{http_code}" -m 15 "$URL/" || true)
-              echo "attempt $i -> $code"
+              code=$(internal)
+              echo "internal attempt $i -> $code"
               alive "$code" && break
             done
           fi
@@ -89,23 +97,29 @@ jobs:
               # SYNC FIRST: the checkout must serve the canonical repo code
               # (a stale checkout is how the public link kept serving the old
               # pasted-transplant build). fetch + reset --hard, log the new
-              # commit, THEN boot — start-production.sh re-syncs anyway and
-              # restarts any stale python face service.
+              # commit, THEN boot — start-production.sh is bun-optional now
+              # (Codespaces have no bun: it builds via npx and serves via node).
               gh cs ssh -c "$CS" -- "cd '$REPO_DIR' && (git fetch origin main 2>/dev/null || git fetch origin 2>/dev/null || true) && git reset --hard origin/main 2>/dev/null || true; echo 'codespace commit:' \$(git rev-parse --short HEAD 2>/dev/null); mkdir -p data && (setsid nohup bash scripts/start-production.sh > data/server.log 2>&1 < /dev/null &); sleep 2; echo rescued" || true
             else
               echo "::warning::repo dir not found inside codespace"
             fi
-            for i in $(seq 1 24); do
+            # start-production rebuilds when sources changed (4-8 min on the
+            # 2-core Codespace) — poll the INTERNAL probe up to 10 minutes.
+            for i in $(seq 1 60); do
               sleep 10
-              code=$(curl -s -o /dev/null -w "%{http_code}" -m 15 "$URL/" || true)
+              code=$(internal)
               echo "rescue attempt $i -> $code"
               alive "$code" && break
             done
           fi
+          # Only NOW is the port real (a listener exists) — make it public.
           gh cs ports visibility 3000:public -c "$CS" 2>&1 || true
           curl -s -m 60 "$URL/api/system/ensure-services" || true
-          code=$(curl -s -o /dev/null -w "%{http_code}" -m 15 "$URL/" || true)
-          echo "final status: $code"
+          sleep 3
+          code=$(internal)
+          echo "final internal status: $code"
+          ext=$(curl -s -o /dev/null -w "%{http_code}" -m 15 "$URL/" || true)
+          echo "final external status: $ext"
           if ! alive "$code"; then
-            echo "::warning::app still not answering after restart attempt"
+            echo "::warning::app still not answering internally after restart attempt"
           fi

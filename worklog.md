@@ -421,7 +421,7 @@ Work Log:
 - scripts/gh-prepare-staging.sh: إعادة تجهيز .gh-staging — 683MB (src 2.8M + mini-services 805M مع النماذج مقسمة 10 أجزاء + skills 61M + data 85M + db + scripts + worklog) — commit bdcae2a
 - bundle محلي خارجي: download/ai-studio-full-backup.bundle (873M)
 - اختبارات: بدون توكن → 401 على كل المسارات الإدارية؛ بتوكن المدير → multi-backup 200 (6 مواقع) + full-backup 200 + end-session dryRun كل الخطوات ok؛ / 200؛ دخول محمد (admin) ناجح
-- محاولة الرفع الفعلية: فشلت — GITHUB_TOKEN المحفوظ (github_pat_1... من 2026-10-27) منتهي/ملغى (Bad credentials)
+- محاولة الرفع الفعلية: فشلت — GITHUB_TOKEN المحفوظ (github_pat_[EXPIRED-REDACTED] من 2026-10-27) منتهي/ملغى (Bad credentials)
 
 Stage Summary:
 - كل شيء جاهز للرفع: شجرة التجهيز + سكربت الدفع + .env بالمفاتيح الظاهرة — ينقص توكن GitHub صالح فقط

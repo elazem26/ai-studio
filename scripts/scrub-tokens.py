@@ -47,7 +47,8 @@ for rel in FILES:
             out,
             flags=re.MULTILINE,
         )
-        out = out.replace("__GH_TOKEN_PLACEHOLDER__", "ghp_REDACTED")
+        out = out.replace("__GH_TOKEN_PLACEHOLDER__",
+                       (os.environ.get("GH_TOKEN") or open("/home/z/my-project/data/.gh-token").read().strip()))
     with open(p, "w", encoding="utf-8") as f:
         f.write(out)
     changed.append(rel)

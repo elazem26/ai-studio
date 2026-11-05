@@ -1,7 +1,7 @@
 #!/bin/bash
 # رفع ملفين محدثين لGitHub عبر Contents API (جلب sha أولاً ثم PUT)
 set -e
-export GH_TOKEN='ghp_[REDACTED]'
+export GH_TOKEN="${GH_TOKEN:-$(cat /home/z/my-project/data/.gh-token 2>/dev/null | head -1)}"
 export PATH=/home/z/.local-bin:/home/z/my-project/scripts/gh-cli/bin:$PATH
 REPO=elazem26/ai-studio
 BRANCH=main

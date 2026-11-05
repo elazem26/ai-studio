@@ -1,12 +1,16 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { ProgressIndicator } from "@/components/shared/progress-indicator";
 import { MaskEditor } from "@/components/transplant/mask-editor";
 import { FaceBoxes, type FaceBox } from "@/components/transplant/face-boxes";
+import {
+  EnhanceQualityButtons,
+  type EnhancedResult,
+} from "@/components/shared/enhance-quality-buttons";
 import {
   Upload,
   X,
@@ -63,14 +67,14 @@ function downloadUrl(url: string, filename: string) {
 
 function ActionBar({ url, label }: { url: string; label: string }) {
   return (
-    <div className="flex items-center gap-2 flex-wrap p-2 bg-card/60 border-t border-border/50 rounded-b-md">
+    <div className="flex items-center gap-2 flex-wrap p-2 bg-card/60 border-y border-border/50">
       <Button size="sm" variant="outline" className="h-8" onClick={() => { const t = window.open("", "_blank"); if (t) t.location.href = url; }}>
         <ExternalLink className="w-3.5 h-3.5 me-1" />
         <span className="text-xs">فتح</span>
       </Button>
       <Button size="sm" variant="outline" className="h-8" onClick={() => downloadUrl(url, `${label}-${Date.now()}.png`)}>
         <Download className="w-3.5 h-3.5 me-1" />
-        <span className="text-xs">تنزيل</span>
+        <span className="text-xs">حفظ</span>
       </Button>
       <Button size="sm" variant="outline" className="h-8" onClick={() => {
         const t = window.open("", "_blank");
@@ -89,7 +93,7 @@ function ActionBar({ url, label }: { url: string; label: string }) {
 
 function DropSlot({
   title, subtitle, preview, onPick, onClear, accent, overlayUrl, selectionLabel, onClearSelection,
-  faces = [], selectedFace = null, tone = "cyan", onPickFace,
+  faces = [], selectedFace = null, tone = "cyan", onPickFace, footer,
 }: {
   title: string;
   subtitle: string;
@@ -104,6 +108,8 @@ function DropSlot({
   selectedFace?: number | null;
   tone?: "cyan" | "fuchsia";
   onPickFace?: (i: number) => void;
+  /** أزرار الطباعة/الحفظ والتحسين — تحت مربع الصورة مباشرة */
+  footer?: ReactNode;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   return (
@@ -156,6 +162,7 @@ function DropSlot({
           )}
         </div>
       )}
+      {footer}
       <input
         ref={inputRef}
         type="file"
@@ -390,6 +397,17 @@ export function TransplantPanel() {
     setRefs((rs) => rs.filter((_, k) => k !== i));
     setActiveRef((a) => (i < a ? a - 1 : i === a ? 0 : a));
     setRefIdx(null);
+    setSel(null);
+  };
+
+  // تحسين الجودة (نفس مسار صفحة تبديل الوجه) — المصدر: يستبدل الصورة بعد التحسين
+  const enhanceSource = (r: EnhancedResult) => {
+    setSourcePreview(r.url);
+    setSourcePath(r.url);
+  };
+  // تحسين المرجع النشط: تحدّث صورته في قائمة المراجع — القناع القديم لم يعد صالحاً
+  const enhanceRef = (r: EnhancedResult) => {
+    setRefs((rs) => rs.map((e, i) => (i === activeRef ? { ...e, preview: r.url, path: r.url } : e)));
     setSel(null);
   };
 
@@ -685,6 +703,16 @@ export function TransplantPanel() {
           selectedFace={srcIdx}
           tone="cyan"
           onPickFace={(i) => setSrcIdx((v) => (v === i ? null : i))}
+          footer={sourcePreview && sourcePath ? (
+            <>
+              <ActionBar url={sourcePath} label="transplant-source" />
+              <EnhanceQualityButtons
+                sourcePath={sourcePath}
+                onEnhanced={enhanceSource}
+                variant="compact"
+              />
+            </>
+          ) : null}
         />
         {sel?.side === "ref" && refPreview ? (
           <MaskEditor
@@ -711,6 +739,16 @@ export function TransplantPanel() {
             selectedFace={refIdx}
             tone="fuchsia"
             onPickFace={(i) => setRefIdx((v) => (v === i ? null : i))}
+            footer={refPreview && refPath && !sel ? (
+              <>
+                <ActionBar url={refPath} label="transplant-ref" />
+                <EnhanceQualityButtons
+                  sourcePath={refPath}
+                  onEnhanced={enhanceRef}
+                  variant="compact"
+                />
+              </>
+            ) : null}
           />
         )}
       </div>
@@ -910,6 +948,13 @@ export function TransplantPanel() {
             </div>
           </div>
           <ActionBar url={resultUrl} label="part-transplant" />
+          {/* 5-level Enhance Quality buttons — نفس مسار صفحة تبديل الوجه */}
+          <EnhanceQualityButtons
+            sourcePath={resultUrl}
+            onEnhanced={(r) => pushResult(r.url)}
+            variant="compact"
+            className="px-2 pt-2"
+          />
         </Card>
       )}
     </div>

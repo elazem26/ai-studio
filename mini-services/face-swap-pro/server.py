@@ -1943,6 +1943,64 @@ def _face_rect(f):
     return int(b[0]), int(b[1]), int(b[2]), int(b[3])
 
 
+def _identity_core(src_img, fs, fr):
+    """STEP 1 of the proven face-swap / head pipeline: render the reference
+    identity INTO the source scene (paste_back=True) + face enhancement.
+
+    Skin/lighting continuity is guaranteed by design — no pasted rectangle,
+    no old-face ghost. Used by head / person / region / custom body-part
+    transplants so ALL of them follow the same merge method (the user's
+    "اتبع طريقة صفحة تبديل الوجه" requirement).
+    """
+    import numpy as np
+    before = src_img.copy()   # true pre-swap snapshot (paste_back mutates)
+    core = _swap_with_strength(src_img, fs, fr)
+    try:
+        b = np.asarray(fs.bbox).flatten()
+        core = _enhance_face(core, before, (int(b[0]), int(b[1]), int(b[2]), int(b[3])))
+    except Exception:
+        pass
+    return core
+
+
+def _dest_body_guard(base_img, face):
+    """Destination body zone below the chin — the v4 whole-body GUARD.
+
+    The blend may only paint where the (already swapped) source person has
+    a body: the transplant changes clothing/texture INSIDE the existing
+    silhouette but can never draw a foreign body over the background —
+    the "صورة فوق صورة" look becomes impossible. Soft chin ramp keeps the
+    face→body transition invisible.
+    """
+    import numpy as np
+    import cv2
+    fx1, fy1, fx2, fy2 = _face_rect(face)
+    sfw, sfh = max(4, fx2 - fx1), max(4, fy2 - fy1)
+    subj = _subject_mask_full(base_img, None)
+    if subj is None:
+        return None
+    band_d = np.zeros(base_img.shape[:2], np.uint8)
+    top_d = max(0, int(fy2 - 0.10 * sfh))
+    band_d[top_d:, :] = 255
+    g = cv2.bitwise_and(subj, band_d)
+    g = _largest_component(g, thresh=60)
+    if (g > 100).sum() <= 500:
+        return None
+    ramp = np.ones(base_img.shape[:2], np.float32)
+    ramp_h = max(4, int(0.50 * sfh))
+    for i in range(ramp_h):
+        wgt = (i + 1) / (ramp_h + 1)
+        row = min(base_img.shape[0] - 1, top_d + i)
+        ramp[row, :] = np.minimum(ramp[row, :], wgt)
+    pe = max(2, int(0.02 * max(base_img.shape[:2])))
+    g = cv2.erode((g > 100).astype(np.uint8) * 255,
+                  cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (pe * 2 + 1, pe * 2 + 1)))
+    k = max(3, (int(0.04 * max(base_img.shape[:2]))) | 1)
+    g = cv2.GaussianBlur(g, (k, k), 0)
+    g = (g.astype(np.float32) * ramp).astype(np.uint8)
+    return g
+
+
 # ======================================================================
 # Selection engine (نص عربي → قناع + معاينة) — /regions/select
 # ======================================================================
@@ -2287,9 +2345,9 @@ def _transplant_impl(body: dict):
                 else:
                     target = ((SW - bw_) // 2, (SH - bh_) // 2, bw_, bh_)
 
-            # ---- إزالة الجزء القديم من المصدر (يمنع «صورة فوق صورة») ----
+            # ---- موضع الوضع جاهز — مصدر اللون من المنطقة المستبدلة ----
             # DESTINATION COLOR REF: the source's OWN region being replaced,
-            # captured BEFORE the erase — it carries the scene's exact
+            # captured BEFORE any modification — it carries the scene's exact
             # light/color/temperature so the transplant can adopt them.
             dest_ref = None
             try:
@@ -2299,9 +2357,37 @@ def _transplant_impl(body: dict):
                     dest_ref = src[dy0:dy1, dx0:dx1].copy()
             except Exception:
                 dest_ref = None
+
+            # ---- CORE PATH for BODY parts (chest/torso/arms/legs/person) ----
+            # The PROVEN face-swap method (same as the head/full-body
+            # pipelines): STEP 1 renders the reference identity INTO the
+            # source scene, STEP 2 blends the selected part INSIDE the
+            # destination silhouette (guard). Replaces the old erase+paste
+            # whose result read as "صورة فوق صورة".
+            core_part = (part in ("chest", "torso", "arms", "legs", "person")
+                         and bool(faces_src_c) and bool(faces_ref_c))
+            base_c, dest_guard = src, None
+            if core_part and not _swapper_ready():
+                _kick_self_heal()
+                return JSONResponse(
+                    {"ok": False,
+                     "error": "نموذج تبديل الوجه قيد التحميل — أعد المحاولة بعد دقيقة"},
+                    status_code=503)
+            if core_part:
+                try:
+                    fs_c = faces_src_c[min(src_idx, len(faces_src_c) - 1)]
+                    fr_c = faces_ref_c[min(ref_idx, len(faces_ref_c) - 1)]
+                    base_c = _identity_core(src, fs_c, fr_c)
+                    dest_guard = _dest_body_guard(base_c, fs_c)
+                except Exception:
+                    traceback.print_exc()
+                    base_c, dest_guard = src, None
+
             erase = body.get("erase")
             if erase is None:
-                erase = (part in R.BODY_PARTS and bool(faces_src_c) and bool(faces_ref_c))
+                # legacy inpaint only when the core path is unavailable
+                erase = (dest_guard is None and part in R.BODY_PARTS
+                         and bool(faces_src_c) and bool(faces_ref_c))
             if erase:
                 try:
                     s_subj = _subject_mask_full(src, None)
@@ -2344,9 +2430,15 @@ def _transplant_impl(body: dict):
                 except Exception:
                     traceback.print_exc()
 
-            result = _blend_onto(src, crop_i, crop_m, target,
-                                 color_strength=color_strength, guard=guard,
-                                 color_ref=dest_ref)
+            # dest_guard → body-part core path (paint INSIDE the destination
+            # silhouette); guard → hair guard (kept, hair path unchanged);
+            # neither → legacy paste (no faces / objects).
+            result = _blend_onto(
+                base_c if dest_guard is not None else src,
+                crop_i, crop_m, target,
+                color_strength=color_strength,
+                guard=dest_guard if dest_guard is not None else guard,
+                color_ref=dest_ref)
 
         # ---------------- HEAD mode ----------------
         elif mode == "head":
@@ -2802,13 +2894,8 @@ def _transplant_impl(body: dict):
                 if tbox:
                     bx, by = int(tbox["x"] * SW), int(tbox["y"] * SH)
                     bw, bh = int(tbox["w"] * SW), int(tbox["h"] * SH)
-                # ERASE the source's own corresponding region first: the old
-                # limbs/torso are inpainted away so they can never peek around
-                # the transplant (the "image pasted over image" look).
-                # hair/face excluded: erasing near the head risks eating the
-                # source face; the pasted band covers those areas anyway.
-                # DESTINATION COLOR REF: captured BEFORE the erase — the
-                # source's own chest/limbs carry the scene's exact light,
+                # DESTINATION COLOR REF: captured BEFORE any modification —
+                # the source's own chest/limbs carry the scene's exact light,
                 # color temperature and shadow direction; the transplant
                 # adopts them instead of matching a mixed background ring.
                 dest_ref = None
@@ -2819,7 +2906,60 @@ def _transplant_impl(body: dict):
                         dest_ref = src[dy0:dy1, dx0:dx1].copy()
                 except Exception:
                     dest_ref = None
-                if region not in ("face", "hair"):
+
+                # ---- CORE PATH (the proven face-swap method, same as the
+                # head / full-body pipelines): STEP 1 renders the reference
+                # identity INTO the source scene, STEP 2 transfers the region
+                # INSIDE the destination silhouette (guard ∩ proportional
+                # band). Replaces erase+paste whose result read as
+                # "صورة فوق صورة".
+                core_region = (region in ("chest", "torso", "arms", "legs")
+                               and bool(faces_src) and bool(faces_ref))
+                base = src
+                guard = None
+                if core_region and not _swapper_ready():
+                    _kick_self_heal()
+                    return JSONResponse(
+                        {"ok": False,
+                         "error": "نموذج تبديل الوجه قيد التحميل — أعد المحاولة بعد دقيقة"},
+                        status_code=503)
+                if core_region:
+                    try:
+                        fs_r = faces_src[min(src_idx, len(faces_src) - 1)]
+                        fr_r = faces_ref[min(ref_idx, len(faces_ref) - 1)]
+                        base = _identity_core(src, fs_r, fr_r)
+                        guard = _dest_body_guard(base, fs_r)
+                        # clip the guard to the SAME proportional band on the
+                        # source body (top_rel..bot_rel × source face height,
+                        # soft-ramped) so only the requested region moves
+                        try:
+                            _sx1, _sy1, _sx2, _sy2 = _face_rect(fs_r)
+                            _sfh = max(4, _sy2 - _sy1)
+                            band_d = np.zeros((SH, SW), np.uint8)
+                            bd_top = max(0, int(_sy1 + max(top_rel, 0.95) * _sfh))
+                            bd_bot = min(SH, int(_sy1 + bot_rel * _sfh))
+                            if bd_bot - bd_top > 8:
+                                band_d[bd_top:bd_bot, :] = 255
+                                bramp = max(2, int(0.18 * (bd_bot - bd_top)))
+                                for i in range(bramp):
+                                    wgt = int(255 * (i + 1) / (bramp + 1))
+                                    if bd_top + i < SH:
+                                        band_d[bd_top + i, :] = np.minimum(band_d[bd_top + i, :], wgt)
+                                    j = bd_bot - 1 - i
+                                    if 0 <= j < SH:
+                                        band_d[j, :] = np.minimum(band_d[j, :], wgt)
+                                guard = (guard.astype(np.float32) *
+                                         (band_d.astype(np.float32) / 255.0)
+                                         ).astype(np.uint8) if guard is not None else band_d
+                        except Exception:
+                            traceback.print_exc()
+                    except Exception:
+                        traceback.print_exc()
+                        base, guard = src, None
+
+                # legacy erase: only when the core path is unavailable
+                # (no faces in one of the images / identity swap failed)
+                if guard is None and region not in ("face", "hair"):
                     try:
                         s_subj = _subject_mask_full(src, None)
                         if s_subj is not None and faces_src:
@@ -2840,14 +2980,24 @@ def _transplant_impl(body: dict):
                                     src = cv2.inpaint(src, erase, 9, cv2.INPAINT_TELEA)
                     except Exception:
                         traceback.print_exc()
-                result = _blend_onto(src, crop_i, crop_m, (bx, by, bw, bh), color_strength=color_strength,
+                result = _blend_onto(base, crop_i, crop_m, (bx, by, bw, bh),
+                                     color_strength=color_strength, guard=guard,
                                      color_ref=dest_ref)
                 if s_src < 1.0:
                     result = cv2.resize(result, (int(SW / s_src), int(SH / s_src)), interpolation=cv2.INTER_LANCZOS4)
                 return {"ok": True, "result": _encode_png(result), "mode": mode, "region": region}
 
             # target: source person (face-guided) or default placement
-            if faces_src and faces_ref and _swapper_ready():
+            if faces_src and faces_ref and not _swapper_ready():
+                # faces exist but the identity model is still loading — a
+                # legacy erase+paste of the WHOLE person is exactly the
+                # "صورة فوق صورة" failure the user reports; retry instead.
+                _kick_self_heal()
+                return JSONResponse(
+                    {"ok": False,
+                     "error": "نموذج تبديل الوجه قيد التحميل — أعد المحاولة بعد دقيقة"},
+                    status_code=503)
+            if faces_src and faces_ref:
                 # ============================================================
                 # v4 — WHOLE-BODY transplant via the PROVEN HEAD PIPELINE.
                 # The old erase+paste produced "صورة فوق صورة" (a separate

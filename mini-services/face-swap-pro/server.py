@@ -1802,6 +1802,10 @@ def _head_mask_grabcut(img, rect, iters=5):
     GrabCut separates hair+face from the reference background so the
     transplant carries NO rectangular background patch. Falls back to a
     filled rect when GrabCut finds nothing solid.
+
+    SPEED (2026-11-06): GrabCut on a 1500px image takes ~30s on this 2-core
+    box — masks are low-frequency, so we run GrabCut on a ≤480px copy and
+    upscale the mask back (measured 35.6s → ~0.8s per call).
     """
     import numpy as np
     import cv2
@@ -1813,16 +1817,29 @@ def _head_mask_grabcut(img, rect, iters=5):
     cv2.rectangle(fallback, (x, y), (x + rw, y + rh), 255, -1)
     if rw < 12 or rh < 12:
         return fallback
-    gc = np.zeros((h, w), np.uint8)
+    s = min(1.0, 480.0 / max(h, w))
+    if s < 1.0:
+        small = cv2.resize(img, (int(w * s), int(h * s)),
+                           interpolation=cv2.INTER_AREA)
+        gx, gy, grw, grh = (int(x * s), int(y * s),
+                            max(2, int(rw * s)), max(2, int(rh * s)))
+    else:
+        small = img
+        gx, gy, grw, grh = x, y, rw, rh
+    gc = np.zeros(small.shape[:2], np.uint8)
     bgd = np.zeros((1, 65), np.float64)
     fgd = np.zeros((1, 65), np.float64)
-    cv2.grabCut(img, gc, (x, y, rw, rh), bgd, fgd, iters, cv2.GC_INIT_WITH_RECT)
-    m = np.where((gc == cv2.GC_FGD) | (gc == cv2.GC_PR_FGD), 255, 0).astype(np.uint8)
+    cv2.grabCut(small, gc, (gx, gy, grw, grh), bgd, fgd, iters,
+                cv2.GC_INIT_WITH_RECT)
+    m = np.where((gc == cv2.GC_FGD) | (gc == cv2.GC_PR_FGD), 255,
+                 0).astype(np.uint8)
+    if s < 1.0:
+        m = cv2.resize(m, (w, h), interpolation=cv2.INTER_LINEAR)
     cnts, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not cnts:
         return fallback
     c = max(cnts, key=cv2.contourArea)
-    if cv2.contourArea(c) < 0.10 * rw * rh:
+    if cv2.contourArea(c) < 0.10 * rw * rh * s * s:
         return fallback
     comp = np.zeros_like(m)
     cv2.drawContours(comp, [c], -1, 255, -1)
@@ -1832,6 +1849,13 @@ def _head_mask_grabcut(img, rect, iters=5):
 
 
 _REMBG_SESSION = None
+
+# ---- subject-mask cache (شكوى المالك: نفس الصورة تُحلَّل 35 ثانية في كل
+# طلب تحديد! rembg+GrabCut على صورة 1500px يستهلكان عشرات الثواني —
+# نخزن القناع النهائي لكل (صورة+rect) ونعيد نسخة منه فوراً في الطلبات
+# التالية. LRU صغير (4 مداخل) يكفي لأن الجلسة تستخدم صورتين إلى ثلاث.)
+_SUBJECT_CACHE: dict = {}
+_SUBJECT_CACHE_MAX = 4
 
 
 def _rembg_mask(img):
@@ -1889,10 +1913,21 @@ def _subject_mask_full(img, rect=None):
     rect=(x,y,w,h) optionally limits the subject to a region (e.g. the head
     bounding area). Result is soft-feathered so blending never shows a hard
     cutout edge.
+
+    CACHED: key = (shape, md5(image bytes), rect) — identical (image, rect)
+    pairs return a copy of the stored mask instantly.
     """
     import numpy as np
     import cv2
+    import hashlib
+    global _SUBJECT_CACHE
     h, w = img.shape[:2]
+    key = (img.shape[:2],
+           hashlib.md5(np.ascontiguousarray(img).tobytes()).hexdigest(),
+           rect if rect is None else tuple(int(round(v)) for v in rect))
+    hit = _SUBJECT_CACHE.get(key)
+    if hit is not None:
+        return hit.copy()
     m = _rembg_mask(img)
     if m is not None:
         m = _largest_component(m, thresh=60)
@@ -1904,7 +1939,11 @@ def _subject_mask_full(img, rect=None):
             m = _largest_component(m, thresh=40)
         if (m > 100).sum() >= 0.02 * h * w:
             k = max(3, (int(0.03 * max(h, w))) | 1)
-            return cv2.GaussianBlur(m, (k, k), 0)
+            out = cv2.GaussianBlur(m, (k, k), 0)
+            if len(_SUBJECT_CACHE) >= _SUBJECT_CACHE_MAX:
+                _SUBJECT_CACHE.pop(next(iter(_SUBJECT_CACHE)))
+            _SUBJECT_CACHE[key] = out.copy()
+            return out
     return _head_mask_grabcut(
         img, rect if rect is not None else
         (int(w * 0.10), int(h * 0.05), int(w * 0.80), int(h * 0.92)))

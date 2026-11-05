@@ -19,7 +19,10 @@ export async function resolveFilePath(input: string): Promise<string> {
   throw new Error("File not found: " + input);
 }
 export async function resolveDataRoot(): Promise<string> {
-  const candidates = [path.join(process.cwd(), "data"), "/home/z/my-project/data", "/home/z/my-project/.next/standalone/data"];
+  // المجلد الأول ثابت خارج .next — إعادة البناء تمسح .next/standalone
+  // كاملاً بما فيه data/uploads (شكوى المالك 2026-11-06: صور جلسة المستخدم
+  // اختفت بعد أي نشر جديد فأصبح التحديد يرد «الصورة غير موجودة»).
+  const candidates = ["/home/z/my-project/data", path.join(process.cwd(), "data"), "/home/z/my-project/.next/standalone/data"];
   for (const c of candidates) { try { await fs.mkdir(c, { recursive: true }); return c; } catch {} }
   return path.join(process.cwd(), "data");
 }

@@ -441,7 +441,14 @@ export function TransplantPanel() {
 
   const run = () => { if (sel) executeSelection(); else execute({ mode, region }); };
 
-  /** طلب تحديد مكان بالنص — يعيد عرض التحديد الأخضر على صورة المرجع */
+  /** طلب تحديد مكان بالنص — يعيد عرض التحديد الأخضر على صورة المرجع.
+   *
+   * مرونة الوكيل (2026-11-06): وكيل المعاينة يقطع الاستجابات الأبطأ من ~20
+   * ثانية ويعيد HTML 502 — `r.json()` يفشل فيصمت الزر ولا يفهم المستخدم
+   * السبب. الحل: إعادة المحاولة تلقائياً حتى 3 مرات (الخدمة تسخن بعد أول
+   * طلب، والبنية الجديدة تُبقي الطلب تحت المهلة) مع رسائل تقدم واضحة، ورسالة
+   * صادقة إذا فشل فهم النص فعلاً.
+   */
   const requestSelection = async (text: string, prevSpec?: any) => {
     const rp = stateRef.current.refPath;
     if (!rp) {
@@ -451,15 +458,35 @@ export function TransplantPanel() {
     }
     setSelBusy(true);
     pushMsg({ role: "agent", text: "أبحث عن المكان وأعرض التحديد…" });
+    let d: any = null;
+    let lastErr = "";
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const r = await fetch("/api/images/part-transplant/select", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text, refPath: rp, side: "ref", ...(refIdx != null ? { faceIndex: refIdx } : {}), ...(prevSpec ? { prevSpec } : {}) }),
+          signal: AbortSignal.timeout(120_000),
+        });
+        const raw = await r.text();
+        try {
+          d = JSON.parse(raw);
+        } catch {
+          lastErr = `غير-JSON (${r.status})`;
+          d = null;
+        }
+      } catch (e: any) {
+        lastErr = e?.message || String(e);
+        d = null;
+      }
+      if (d) break;
+      if (attempt < 3) {
+        pushMsg({ role: "agent", text: `الخدمة تأخرت قليلاً — أعيد المحاولة تلقائياً (${attempt}/3)…` });
+        await new Promise((res) => setTimeout(res, 1500));
+      }
+    }
     try {
-      const r = await fetch("/api/images/part-transplant/select", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, refPath: rp, side: "ref", ...(refIdx != null ? { faceIndex: refIdx } : {}), ...(prevSpec ? { prevSpec } : {}) }),
-        signal: AbortSignal.timeout(120_000),
-      });
-      const d = await r.json().catch(() => ({}));
-      if (d.ok) {
+      if (d?.ok) {
         setSel({ side: "ref", overlay: d.overlay, mask: d.mask, label: d.label, spec: d.spec, areaPct: d.areaPct });
         pushMsg({
           role: "agent",
@@ -470,16 +497,22 @@ export function TransplantPanel() {
             `التحديد خطأ؟ عدّل كتابتك وسيظهر التحديد الجديد — أمثلة: «الشعر فقط»، «بدون الوجه»، «الجهة اليسرى»، «كبّر التحديد».`,
         });
         speak("ظهر التحديد. اضغط نقل الآن إذا كان صحيحا أو عدل كتابتك");
-      } else {
+      } else if (d) {
         const hints: string[] = d.hint || [];
+        const missingImg = /الصورة غير موجودة|تعذر قراءة الصورة/.test(d.error || "");
         pushMsg({
           role: "agent",
-          text: `${d.error || "لم أفهم المكان."}${hints.length ? "\nجرّب: " + hints.slice(0, 6).join("، ") : ""}`,
+          text: missingImg
+            ? "انتهت جلسة الصور على السيرفر — أعد رفع صورة المصدر وصورة المرجع فوق ☝️ ثم اكتب المكان وسيعمل التحديد فوراً."
+            : `${d.error || "لم أفهم المكان."}${hints.length ? "\nجرّب: " + hints.slice(0, 6).join("، ") : ""}`,
         });
-        speak("لم افهم المكان. عدل الكتابة");
+        if (missingImg) speak("اعد رفع الصور ثم اكتب المكان");
+        else if (d.unparsed) speak("لم افهم المكان. عدل الكتابة");
+        else speak("تعذر التحديد في هذه الصورة. عدل الكتابة أو اختر من الاقتراحات");
+      } else {
+        pushMsg({ role: "agent", text: `خدمة التحديد مشغولة الآن (${lastErr}) — أعد المحاولة الآن وستنجح، فالخدمة أصبحت مستيقظة.` });
+        speak("الخدمة مشغولة. اعد المحاولة الآن وستنجح");
       }
-    } catch (e: any) {
-      pushMsg({ role: "agent", text: `تعذر التحديد: ${e?.message || e}` });
     } finally {
       setSelBusy(false);
     }

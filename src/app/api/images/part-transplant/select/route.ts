@@ -96,8 +96,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(res.data);
   }
 
-  // ---- المحاولة 2: LLM للصياغة الحرة ----
-  try {
+  // ---- المحاولة 2: LLM للصياغة الحرة (بميزانية زمنية 9 ثوانٍ) ----
+  // سبب الجذر (2026-11-06): استدعاء LLM الحر كان بلا مهلة — 35 ثانية وأكثر
+  // → وكيل المعاينة space-z.ai يقطع الاستجابة عند ~20 ثانية → HTML 502 →
+  // الواجهة تفشل في JSON.parse → تُظهر «لم افهم المكان.» فارغة. الآن: إن
+  // تجاوز LLM الميزانية نُعيد رسالة المحلل الحتمي فوراً ونُتابع عمل LLM في
+  // الخلفية (يُتجاهل).
+  const LLM_BUDGET_MS = 9_000;
+  const llmTimeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), LLM_BUDGET_MS));
+  const llmWork = (async () => {
     const Z = await import("z-ai-web-dev-sdk");
     const zai = await Z.default.create();
     const facesInfo = JSON.stringify(res.data?.faces || []);
@@ -121,9 +128,12 @@ export async function POST(req: NextRequest) {
         }
       }
     }
-  } catch {
-    // LLM غير متاح أو رد غير صالح → نرجع رسالة المحلل الحتمي
-  }
+    return null;
+  })();
+
+  const won = await Promise.race([llmWork, llmTimeout]);
+  if (won) return won;
+  llmWork.catch(() => {});
 
   return NextResponse.json({
     ok: false,

@@ -592,3 +592,13 @@ Stage Summary:
 - **واجهة**: مكوّن `mask-brush-overlay.tsx` — فرشاة على الصورة بدقة القناع = دقة الصورة الأصلية، حجم فرشاة 4-150px، وضعا «تحديد/إزالة تحديد»، تراجع (12 خطوة) + مسح الكل، مؤشر دائري يتبع المؤشر، Enter/Esc.
 - **ensure-services**: يفحص ويشغّل ويسخّن خدمة 3031 مع البقية.
 - **اختبارات**: محرك (خارج القناع 0 بكسل متغير، التعبئة 170≈الخلفية)، E2E عبر Next.js مع قتل الخدمة (إعادة تشغيل تلقائية ✓)، سلاسل الواجهة موجودة في chunk البناء.
+
+### 2026-11-07 — v5.6.0: حفظ + تنظيف التكرار + رفع GitHub + حزمة الكمبيوتر الكاملة
+- **رفع GitHub**: استيعاب انفراج 9 التزامات cron بعيدة (دمج -X ours لصالح العمل المحلي) — التوكن المضمّن أُزيل من الشجرة والتاريخ (filter-branch على 17 التزاماً غير مرفوع فقط؛ push-protection رفض أول محاولة) — السكربتات تقرأ التوكن وقت التشغيل من data/.gh-token. المزامنة 0/0 على main.
+- **حذف التكرار**: backups/2026-11-03-seamless-update (3 ملفات) + 6 سكربتات ميتة + 6 ملفات تشغيل قديمة (START-AI-STUDIO.*, start.sh, start-ai-studio.sh, README-START/RUN).
+- **أمن**: .env غير متتبع؛ فقط scripts/push-keepalive-yml.sh كان يحمل التوكن الحي — استُبدل بنسخة runtime lookup.
+- **v5.6.0**: توحيد ملفات التشغيل بثلاثية جديدة في جذر المستودع (START-WINDOWS.bat CRLF + START-MAC-LINUX.sh + README-FIRST.md + requirements.txt) — package.json version=5.6.0، تحديث quick-launch/backup.ts للأسماء الجديدة.
+- **حزمة الكمبيوتر الكاملة** (957MB، 609 ملفاً): كود + lama_fp32 (199MB) + insightface (buffalo_l 326MB + inswapper_128 530MB → models-insightface/) + db/custom.db + .env sqlite نسبي + سكربتات تشغيل آلية (نسخ نماذج أول مرة، pip، npm install، prisma، next build، تشغيل 3000).
+- **GitHub Release v5.6.0** (id 436924505): أصل AI-Studio-Desktop-v5.6.0.zip (956MB) — التحميل المباشر يعمل (302 → CDN). الرابط الثابت: /releases/download/v5.6.0/AI-Studio-Desktop-v5.6.0.zip — وlatest/ يعمل أيضاً.
+- **الزر الداخلي** «تشغيل من الكمبيوتر»: download/AI-Studio-v5.6.0.tar.gz (957MB) جاهزة لـ /api/system/download-pc (DOWNLOAD_DIR=download ✓).
+- سكربتات جديدة: scripts/git-push-live.sh، build-desktop-package.sh، gh-create-release.sh.

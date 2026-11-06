@@ -525,6 +525,7 @@ export function ImageToolsPanel() {
       setImgDisplayRect({ width: r.width, height: r.height });
     }
     setZoom(1); // overlay alignment requires zoom=1 (same rule as crop)
+    setCropMode(false); // modes are mutually exclusive
     setMaskMode(true);
   };
   const handleWatermark = async () => { if (!image) return; setBusy("watermark"); try { const r = await fetch("/api/images/watermark", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sourcePath: image.path, text: wmText, opacity: wmOpacity / 100, position: "bottom-right" }) }); const d = await r.json(); if (r.ok) { updateImage(d); toast({ title: locale === "ar" ? "تمت العلامة المائية" : "Watermarked" }); } else toast({ title: "Error", description: d.error || d.message, variant: "destructive" }); } finally { setBusy(null); } };
@@ -626,7 +627,7 @@ export function ImageToolsPanel() {
       {/* Progress indicator — shows during any image operation */}
       <ProgressIndicator
         busy={!!busy || uploading}
-        label={uploading ? "جارٍ رفع الصورة..." : busy ? `جارٍ ${busy === "enhance" ? "التحسين" : busy === "colorize" ? "التلوين" : busy === "restore" ? "الترميم" : busy === "filter" ? "الفلتر" : busy === "face-retouch" ? "تنعيم البشرة" : busy === "bg-change" ? "تغيير الخلفية" : busy === "expand" ? "التوسيع" : busy === "sharpen" ? "الشحذ" : busy === "blur" ? "التضبيب" : busy === "flip" ? "القلب" : busy === "rotate" ? "التدوير" : busy === "crop" ? "القص" : "المعالجة"}...` : "المعالجة"}
+        label={uploading ? "جارٍ رفع الصورة..." : busy ? `جارٍ ${busy === "enhance" ? "التحسين" : busy === "colorize" ? "التلوين" : busy === "restore" ? "الترميم" : busy === "filter" ? "الفلتر" : busy === "face-retouch" ? "تنعيم البشرة" : busy === "bg-change" ? "تغيير الخلفية" : busy === "expand" ? "التوسيع" : busy === "sharpen" ? "الشحذ" : busy === "blur" ? "التضبيب" : busy === "flip" ? "القلب" : busy === "rotate" ? "التدوير" : busy === "crop" ? "القص" : busy === "rm-obj" ? "إزالة الكائن" : "المعالجة"}...` : "المعالجة"}
       />
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
         <Card className="studio-panel border-panel-border lg:col-span-2 min-h-[400px]">
@@ -1032,6 +1033,7 @@ export function ImageToolsPanel() {
                 // the unzoomed displayWidth/displayHeight, so zoom>1 would
                 // misalign the overlay's coordinates with the actual image.
                 setZoom(1);
+                setMaskMode(false); // modes are mutually exclusive
                 setCropMode(true);
               }}
               disabled={!image || busy !== null}

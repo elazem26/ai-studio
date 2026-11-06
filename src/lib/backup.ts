@@ -27,9 +27,9 @@ export const DOWNLOAD_DIR = path.join(PROJECT, "download");
 export async function getAppVersion(): Promise<string> {
   try {
     const pkg = JSON.parse(await fs.readFile(path.join(PROJECT, "package.json"), "utf8"));
-    return pkg.version || "5.5.0";
+    return pkg.version || "5.6.0";
   } catch {
-    return "5.5.0";
+    return "5.6.0";
   }
 }
 
@@ -86,7 +86,7 @@ async function backupTargets(): Promise<string[]> {
     "mini-services/face-swap-pro/README.md",
     "package.json", "bun.lock", "next.config.ts", "tsconfig.json",
     "postcss.config.mjs", "components.json", "worklog.md",
-    "tailwind.config.ts", "start.sh", "README-RUN.md", ".env.example",
+    "tailwind.config.ts", "README-FIRST.md", ".env.example",
   ];
   const out: string[] = [];
   for (const w of wanted) {
@@ -346,7 +346,7 @@ export async function buildPCPackage(): Promise<{ file: string; sizeBytes: numbe
   const targets = await backupTargets();
   // one-click launchers at package root (Windows / macOS / Linux)
   for (const launcher of [
-    "START-AI-STUDIO.bat", "start-ai-studio.sh", "START-AI-STUDIO.command", "README-START.txt",
+    "START-WINDOWS.bat", "START-MAC-LINUX.sh",
   ]) {
     try { await fs.access(path.join(PROJECT, launcher)); targets.push(launcher); } catch { /* missing → skip */ }
   }

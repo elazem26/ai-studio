@@ -1,0 +1,7 @@
+# تبعيات خدمات المعالجة المحلية (تبديل الوجوه 3030 + إزالة الكائنات 3031)
+fastapi>=0.110
+uvicorn>=0.27
+onnxruntime>=1.17
+numpy>=1.26
+opencv-python-headless>=4.9
+pillow>=10.0

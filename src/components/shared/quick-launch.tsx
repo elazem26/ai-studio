@@ -18,9 +18,9 @@ import {
  *      elazem26/ai-studio repo; the devcontainer auto-installs deps and
  *      auto-starts the server, the browser opens automatically.
  *      Use when the main system is down/hanging.
- *   3. "تشغيل من الكمبيوتر"      → downloads AI-Studio-v5.5.0.tar.gz
- *      (code + db + keys + models + one-click launchers); the user
- *      extracts it and double-clicks START-AI-STUDIO.bat — browser
+ *   3. "تشغيل من الكمبيوتر"      → downloads AI-Studio-v5.6.0.tar.gz
+ *      (code + db + models + one-click launchers); the user
+ *      extracts it and double-clicks START-WINDOWS.bat — browser
  *      opens automatically.
  */
 
@@ -115,7 +115,7 @@ export async function launchFromPcDownload(): Promise<void> {
     // authenticates it; the browser shows its own progress bar.
     const a = document.createElement("a");
     a.href = "/api/system/download-pc";
-    a.download = "AI-Studio-v5.5.0.tar.gz";
+    a.download = "AI-Studio-v5.6.0.tar.gz";
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -124,8 +124,8 @@ export async function launchFromPcDownload(): Promise<void> {
         "⬇️ التحميل بدأ (يكمل في شريط التنزيلات)…\n\n" +
           "بعد اكتماله لتشغيل المشروع مباشرة:\n" +
           "1. فك الضغط عن الملف\n" +
-          "2. اضغط START-AI-STUDIO.bat (ويندوز) — يفتح المتصفح ويعمل\n\n" +
-          "الماك: START-AI-STUDIO.command — لينكس: start-ai-studio.sh"
+          "2. اضغط START-WINDOWS.bat (ويندوز) — يفتح المتصفح ويعمل\n\n" +
+          "الماك/لينكس: bash START-MAC-LINUX.sh"
       );
     }, 600);
   } catch (e: any) {
@@ -207,7 +207,7 @@ export function QuickLaunch({ compact = false }: { compact?: boolean }) {
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">
-            <p>يحمّل النسخة الكاملة AI-Studio-v5.5.0 — فك الضغط واضغط START-AI-STUDIO.bat ويعمل فوراً</p>
+            <p>يحمّل النسخة الكاملة AI-Studio-v5.6.0 — فك الضغط واضغط START-WINDOWS.bat ويعمل فوراً</p>
           </TooltipContent>
         </Tooltip>
       </TooltipProvider>

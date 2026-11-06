@@ -3,14 +3,15 @@ import { promises as fs } from "fs";
 import path from "path";
 import sharp from "sharp";
 import { logEvent } from "@/lib/logger";
-import { resolveFilePath } from "@/lib/security/resolve-file-path";
+import { resolveFilePath, dataRootSync } from "@/lib/security/resolve-file-path";
+const DATA_ROOT = dataRootSync();
 import { aiEditFrameLocked } from "@/lib/ai-image-edit";
 import { tryAcquireProcessingLock, releaseProcessingLock, getProcessingStatus } from "@/lib/processing-lock";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const RESULTS_ROOT = path.resolve(process.cwd(), "data/results");
+const RESULTS_ROOT = path.join(DATA_ROOT, "results");
 
 type QualityKey = "hd" | "fullHd" | "twoK" | "fourK" | "ultraHd";
 

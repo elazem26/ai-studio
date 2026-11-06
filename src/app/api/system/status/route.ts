@@ -1,3 +1,5 @@
+import { dataRootSync } from "@/lib/security/resolve-file-path";
+const DATA_ROOT = dataRootSync();
 import { NextResponse } from "next/server";
 import { promises as fs } from "fs";
 import path from "path";
@@ -12,7 +14,7 @@ export const runtime = "nodejs";
  */
 export async function GET() {
   // Check if any model is installed (look at /data/models dir)
-  const modelsRoot = path.resolve(process.cwd(), "data/models");
+  const modelsRoot = path.join(DATA_ROOT, "models");
   let modelsInstalledCount = 0;
   try {
     const entries = await fs.readdir(modelsRoot);
@@ -22,7 +24,7 @@ export async function GET() {
   }
 
   // Check size of temp folder
-  const tempRoot = path.resolve(process.cwd(), "data/temp");
+  const tempRoot = path.join(DATA_ROOT, "temp");
   let tempSizeBytes = 0;
   try {
     const entries = await fs.readdir(tempRoot);

@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { promises as fs } from "fs";
 import path from "path";
 import sharp from "sharp";
-import { resolveFilePath } from "@/lib/security/resolve-file-path";
+import { resolveFilePath, dataRootSync } from "@/lib/security/resolve-file-path";
+const DATA_ROOT = dataRootSync();
 import { readForDetect } from "@/lib/detect-image";
 import { tryAcquireProcessingLock, releaseProcessingLock, getProcessingStatus } from "@/lib/processing-lock";
 import {
@@ -724,7 +725,7 @@ async function runSwapPipeline(
   onStage?.("saving", "حفظ النتيجة النهائية…", "Saving final result…", 96);
 
   const out = `garment-swap-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.png`;
-  const outPath = path.join(path.resolve(process.cwd(), "data/results"), out);
+  const outPath = path.join(path.join(DATA_ROOT, "results"), out);
   await fs.mkdir(path.dirname(outPath), { recursive: true });
   await fs.writeFile(outPath, resultBuf);
   const fm = await sharp(resultBuf).metadata();

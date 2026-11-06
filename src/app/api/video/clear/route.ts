@@ -1,3 +1,5 @@
+import { dataRootSync } from "@/lib/security/resolve-file-path";
+const DATA_ROOT = dataRootSync();
 import { NextRequest, NextResponse } from "next/server";
 import { promises as fs } from "fs";
 import path from "path";
@@ -6,8 +8,8 @@ import { logEvent } from "@/lib/logger";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const R = path.resolve(process.cwd(), "data/results");
-const SESSIONS = path.resolve(process.cwd(), "data/sessions");
+const R = path.join(DATA_ROOT, "results");
+const SESSIONS = path.join(DATA_ROOT, "sessions");
 
 /**
  * POST /api/video/clear

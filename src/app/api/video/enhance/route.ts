@@ -1,3 +1,5 @@
+import { dataRootSync } from "@/lib/security/resolve-file-path";
+const DATA_ROOT = dataRootSync();
 import { NextRequest, NextResponse } from "next/server";
 import { promises as fs, createWriteStream } from "fs";
 import { execFile } from "child_process";
@@ -12,7 +14,7 @@ export const dynamic = "force-dynamic";
 // Allow very large uploads (no body size limit)
 export const maxDuration = 3600; // 1 hour max for very large files
 
-const R = path.resolve(process.cwd(), "data/results");
+const R = path.join(DATA_ROOT, "results");
 
 /** Run an async operation with a hard timeout (rejects with "TIMEOUT" after `ms` ms). */
 function withTimeout<T>(p: Promise<T>, ms: number, label = "operation"): Promise<T> {

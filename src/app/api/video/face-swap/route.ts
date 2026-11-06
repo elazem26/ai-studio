@@ -3,7 +3,8 @@ import { promises as fs, createWriteStream } from "fs";
 import { execFile } from "child_process";
 import path from "path";
 import { createTask, updateTask } from "@/lib/task-store";
-import { resolveFilePath } from "@/lib/security/resolve-file-path";
+import { resolveFilePath, dataRootSync } from "@/lib/security/resolve-file-path";
+const DATA_ROOT = dataRootSync();
 import { tryAcquireProcessingLock, releaseProcessingLock, getProcessingStatus } from "@/lib/processing-lock";
 import { sweepOldVideos } from "@/lib/backup";
 import { findMiniServiceScript, miniServiceRoot } from "@/lib/mini-service";
@@ -13,7 +14,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 3600;
 
-const R = path.resolve(process.cwd(), "data/results");
+const R = path.join(DATA_ROOT, "results");
 const MINI_SERVICE_URL = process.env.FACE_SWAP_SERVICE_URL || "http://localhost:3030";
 
 /** Extract a representative frame as a JPG poster (t=1s, fallback t=0). */

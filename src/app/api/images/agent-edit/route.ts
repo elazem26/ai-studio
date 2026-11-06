@@ -4,10 +4,11 @@ import path from "path";
 import sharp from "sharp";
 import { logEvent } from "@/lib/logger";
 import { createTask, updateTask } from "@/lib/task-store";
-import { resolveFilePath } from "@/lib/security/resolve-file-path";
+import { resolveFilePath, dataRootSync } from "@/lib/security/resolve-file-path";
+const DATA_ROOT = dataRootSync();
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-const R = path.resolve(process.cwd(), "data/results");
+const R = path.join(DATA_ROOT, "results");
 const WR: Record<string,string> = { "woman":"a person","man":"a person","girl":"a person","boy":"a person","face":"","age":"","body":"","skin":"skin tone","naked":"","nude":"","sex":"","violence":"","blood":"","امرأة":"a person","رجل":"a person","بنت":"a person","ولد":"a person","وجه":"","عمر":"","جسم":"","بشرة":"skin tone","عاري":"","جنس":"","عنف":"","دم":"" };
 function clean(s: string): string { let p = s.trim().slice(0,800); for(const[w,r] of Object.entries(WR)) p = p.replace(new RegExp(`\\b${w}\\b`,"gi"),r); return p.replace(/\s+/g," ").trim() || "improve"; }
 function isCF(e: unknown): boolean { const m = e instanceof Error ? e.message : String(e); return m.includes("1301")||m.includes("contentFilter")||m.includes("不安全")||m.includes("敏感内容"); }

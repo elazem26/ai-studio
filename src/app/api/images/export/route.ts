@@ -3,7 +3,8 @@ import { promises as fs } from "fs";
 import path from "path";
 import sharp from "sharp";
 import { logEvent } from "@/lib/logger";
-import { resolveFilePath } from "@/lib/security/resolve-file-path";
+import { resolveFilePath, dataRootSync } from "@/lib/security/resolve-file-path";
+const DATA_ROOT = dataRootSync();
 
 export const runtime = "nodejs";
 
@@ -64,7 +65,7 @@ export async function POST(req: NextRequest) {
       .toBuffer();
 
     const outName = `export-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${body.format}`;
-    const outDir = path.resolve(process.cwd(), "data/results");
+    const outDir = path.join(DATA_ROOT, "results");
     await fs.mkdir(outDir, { recursive: true });
     const outPath = path.join(outDir, outName);
     await fs.writeFile(outPath, buffer);

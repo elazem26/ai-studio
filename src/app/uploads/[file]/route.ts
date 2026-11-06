@@ -46,31 +46,37 @@ export async function GET(
       return NextResponse.json({ ok: false, error: "Unsupported file type" }, { status: 400 });
     }
 
-    const root = await resolveDataRoot();
-    const target = path.join(root, "uploads", safeName);
-    // Resolve and verify it's still inside data/uploads/
-    const normalizedTarget = path.resolve(target);
-    const uploadsRoot = path.resolve(path.join(root, "uploads"));
-    if (!normalizedTarget.startsWith(uploadsRoot + path.sep)) {
-      return NextResponse.json({ ok: false, error: "Path traversal" }, { status: 400 });
+    // الجذر الدائم أولاً ثم الجذور القديمة (صور رُفعت قبل توحيد الجذر)
+    const roots = [
+      await resolveDataRoot(),
+      "/home/z/my-project/.next/standalone/data",
+      path.join(process.cwd(), "data"),
+    ];
+    const uploadsRoots = roots.map((r) => path.resolve(path.join(r, "uploads")));
+    let buf: Buffer | null = null;
+    for (let i = 0; i < roots.length; i++) {
+      const target = path.resolve(path.join(roots[i], "uploads", safeName));
+      // SECURITY: verify it's still inside that root (no path traversal)
+      if (!target.startsWith(uploadsRoots[i] + path.sep)) continue;
+      try {
+        buf = await fs.readFile(target);
+        break;
+      } catch (e: any) {
+        if (e?.code !== "ENOENT") throw e;
+      }
     }
 
-    try {
-      const buf = await fs.readFile(target);
-      return new NextResponse(buf, {
-        status: 200,
-        headers: {
-          "Content-Type": MIME[ext],
-          "Cache-Control": "public, max-age=3600, must-revalidate",
-          "Content-Length": String(buf.length),
-        },
-      });
-    } catch (e: any) {
-      if (e?.code === "ENOENT") {
-        return NextResponse.json({ ok: false, error: "File not found" }, { status: 404 });
-      }
-      throw e;
+    if (!buf) {
+      return NextResponse.json({ ok: false, error: "File not found" }, { status: 404 });
     }
+    return new NextResponse(buf, {
+      status: 200,
+      headers: {
+        "Content-Type": MIME[ext],
+        "Cache-Control": "public, max-age=3600, must-revalidate",
+        "Content-Length": String(buf.length),
+      },
+    });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || "Server error" }, { status: 500 });
   }

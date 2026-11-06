@@ -1,3 +1,5 @@
+import { dataRootSync } from "@/lib/security/resolve-file-path";
+const DATA_ROOT = dataRootSync();
 import { NextRequest, NextResponse } from "next/server";
 import { promises as fs, createWriteStream } from "fs";
 import { execFile } from "child_process";
@@ -10,7 +12,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 600; // 10 min max
 
-const R = path.resolve(process.cwd(), "data/results");
+const R = path.join(DATA_ROOT, "results");
 
 function runCmd(cmd: string, args: string[], opts: { cwd?: string } = {}): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {

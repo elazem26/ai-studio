@@ -1,3 +1,5 @@
+import { dataRootSync } from "@/lib/security/resolve-file-path";
+const DATA_ROOT = dataRootSync();
 import { NextRequest, NextResponse } from "next/server";
 import { promises as fs } from "fs";
 import path from "path";
@@ -8,7 +10,7 @@ import { aiEditFrameLocked } from "@/lib/ai-image-edit";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const RESULTS_ROOT = path.resolve(process.cwd(), "data/results");
+const RESULTS_ROOT = path.join(DATA_ROOT, "results");
 
 interface ChangeBackgroundBody {
   sourcePath: string;

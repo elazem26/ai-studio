@@ -29,6 +29,17 @@ export async function resolveDataRoot(): Promise<string> {
   for (const c of candidates) { try { await fs.mkdir(c, { recursive: true }); return c; } catch {} }
   return path.join(process.cwd(), "data");
 }
+/**
+ * نسخة متزامنة من resolveDataRoot لمستدعيات مستوى الوحدة (module-level consts).
+ * السيرفر المستقل (standalone) يعمل بـ cwd = .next/standalone، لذا أي كتابة
+ * عبر process.cwd()/data تذهب إلى .next/standalone/data التي (1) لا يراها
+ * مسارا الخدمة /results و /uploads اللذان يستخدمان resolveDataRoot، و(2) تُمسح
+ * بالكامل عند كل إعادة بناء (شكوى المالك: اختفاء النتائج بعد النشر).
+ * الجذر الثابت /home/z/my-project/data هو المرجع الدائم للكتابة والقراءة.
+ */
+export function dataRootSync(): string {
+  return "/home/z/my-project/data";
+}
 export function pathToUrl(p: string): string {
   return p.startsWith("data:") ? p : "/" + p.replace("/home/z/my-project/.next/standalone/data", "").replace("/home/z/my-project/data", "").replace(/^\/+/, "");
 }

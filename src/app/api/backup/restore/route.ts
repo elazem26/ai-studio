@@ -1,10 +1,12 @@
+import { dataRootSync } from "@/lib/security/resolve-file-path";
+const DATA_ROOT = dataRootSync();
 import { NextRequest, NextResponse } from "next/server";
 import { promises as fs } from "fs";
 import path from "path";
 import { logEvent } from "@/lib/logger";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-const BACKUP_INFO_PATH = path.resolve(process.cwd(), "data/backup-info.json");
+const BACKUP_INFO_PATH = path.join(DATA_ROOT, "backup-info.json");
 const MANAGER_KEY = "1970";
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));

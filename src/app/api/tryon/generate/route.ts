@@ -6,7 +6,8 @@ import sharp from "sharp";
 import { getAdapter, selectBestModel } from "@/lib/ai/model-manager";
 import type { HardwareSnapshot } from "@/lib/ai/model-manager";
 import { logEvent } from "@/lib/logger";
-import { resolveFilePath } from "@/lib/security/resolve-file-path";
+import { resolveFilePath, dataRootSync } from "@/lib/security/resolve-file-path";
+const DATA_ROOT = dataRootSync();
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -70,8 +71,8 @@ export function cancelActiveTask(id: string): boolean {
   return true;
 }
 
-const RESULTS_ROOT = path.resolve(process.cwd(), "data/results");
-const TEMP_ROOT = path.resolve(process.cwd(), "data/temp");
+const RESULTS_ROOT = path.join(DATA_ROOT, "results");
+const TEMP_ROOT = path.join(DATA_ROOT, "temp");
 
 interface GenerateBody {
   sourcePath: string;

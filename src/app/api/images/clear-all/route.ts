@@ -1,3 +1,5 @@
+import { dataRootSync } from "@/lib/security/resolve-file-path";
+const DATA_ROOT = dataRootSync();
 import { NextRequest, NextResponse } from "next/server";
 import { promises as fs } from "fs";
 import path from "path";
@@ -24,8 +26,8 @@ export const dynamic = "force-dynamic";
  *     backups meant to survive session resets
  */
 export async function POST(_req: NextRequest) {
-  const UPLOADS_ROOT = path.resolve(process.cwd(), "data/uploads");
-  const RESULTS_ROOT = path.resolve(process.cwd(), "data/results");
+  const UPLOADS_ROOT = path.join(DATA_ROOT, "uploads");
+  const RESULTS_ROOT = path.join(DATA_ROOT, "results");
 
   let deletedUploads = 0;
   let deletedResults = 0;

@@ -2,12 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { promises as fs } from "fs";
 import { execFile } from "child_process";
 import path from "path";
-import { resolveFilePath } from "@/lib/security/resolve-file-path";
+import { resolveFilePath, dataRootSync } from "@/lib/security/resolve-file-path";
+const DATA_ROOT = dataRootSync();
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const R = path.resolve(process.cwd(), "data/results");
+const R = path.join(DATA_ROOT, "results");
 const MINI_SERVICE_URL = process.env.FACE_SWAP_SERVICE_URL || "http://localhost:3030";
 
 async function isMiniServiceUp(): Promise<boolean> {

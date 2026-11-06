@@ -14,7 +14,6 @@
     "imageTools": "Image Tools",
     "agents": "AI Agents",
     "faceSwap": "Face Swap",
-    "transplant": "Part Transplant",
     "videoEditor": "Video Editor",
     "navHint": "Choose a tool to start"
   },
@@ -27,7 +26,6 @@
     "imageTools": "Enhance, fix, transform images",
     "agents": "Conversational AI agents",
     "faceSwap": "Swap faces between photos",
-    "transplant": "Move a head, body, animal or background between photos realistically",
     "videoEditor": "Edit & trim video clips"
   },
   "projects": {

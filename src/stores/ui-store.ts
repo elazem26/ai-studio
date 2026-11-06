@@ -6,7 +6,6 @@ export type TabKey =
   | "studio"
   | "imageTools"
   | "faceSwap"
-  | "transplant"
   | "garmentEditor"
   | "modelManager"
   | "agents"
@@ -82,7 +81,6 @@ export const useUIStore = create<UIState>()(
         studio: "source",
         imageTools: "source",
         faceSwap: "result",
-        transplant: "result",
         garmentEditor: "source",
       },
       garmentSourceTab: "studio",
@@ -111,7 +109,6 @@ export const useUIStore = create<UIState>()(
             studio: "source",
             imageTools: "source",
             faceSwap: "result",
-            transplant: "result",
             garmentEditor: "source",
           },
           garmentSourceTab: "studio",

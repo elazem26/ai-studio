@@ -17,7 +17,6 @@ import { DeveloperPanel } from "@/components/system/developer-panel";
 import { GarmentEditorPanel } from "@/components/garment-editor/garment-editor-panel";
 import { ImageToolsPanel } from "@/components/image-tools/image-tools-panel";
 import { FaceSwapPanel } from "@/components/face-swap/face-swap-panel";
-import { TransplantPanel } from "@/components/transplant/transplant-panel";
 import { VideoEditorPanel } from "@/components/video-editor/video-editor-panel";
 import { AgentsPanel } from "@/components/agents/agents-panel";
 import { useUIStore } from "@/stores/ui-store";
@@ -80,7 +79,6 @@ export default function Home() {
         )}
         {activeTab === "imageTools" && <ImageToolsPanel />}
         {activeTab === "faceSwap" && <FaceSwapPanel />}
-        {activeTab === "transplant" && <TransplantPanel />}
         {activeTab === "garmentEditor" && <GarmentEditorPanel />}
         {activeTab === "videoEditor" && <VideoEditorPanel />}
         {isPrivileged && activeTab === "modelManager" && <ModelManagerPanel />}

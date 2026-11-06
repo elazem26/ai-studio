@@ -8,7 +8,10 @@ export async function resolveFilePath(input: string): Promise<string> {
     const p = input.replace("/home/z/my-project/data/", "/home/z/my-project/.next/standalone/data/");
     try { await fs.access(p); return p; } catch {}
   }
-  const rel = input.startsWith("/") ? input.slice(1) : input;
+  // "data/uploads/x.png" (شكل path الذي يعيده رفع الصور) — نزيل بادئة
+  // "data/" حتى لا يصبح البحث data/data/uploads داخل جذور البيانات.
+  const raw = input.startsWith("/") ? input.slice(1) : input;
+  const rel = raw === "data" || raw.startsWith("data/") ? raw.slice(5) : raw;
   for (const c of [
     path.join("/home/z/my-project/.next/standalone/data", rel),
     path.join("/home/z/my-project/data", rel),

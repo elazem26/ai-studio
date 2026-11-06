@@ -1,7 +1,7 @@
 #!/bin/bash
 # رفع ملف واحد لGitHub: keep-alive.yml بعد تعديل خطوة الإنقاذ
 set -e
-export GH_TOKEN='{{GH_TOKEN_RUNTIME}}'
+export GH_TOKEN="${GH_TOKEN:-$(cat /home/z/my-project/data/.gh-token 2>/dev/null | head -1)}"
 export PATH=/home/z/.local-bin:/home/z/my-project/scripts/gh-cli/bin:$PATH
 REPO=elazem26/ai-studio
 P=.github/workflows/keep-alive.yml

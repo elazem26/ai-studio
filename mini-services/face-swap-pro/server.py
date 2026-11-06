@@ -3131,6 +3131,121 @@ def _transplant_impl(body: dict):
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
 
+# ============================================================================
+# GARMENT COMPOSITE (نقل الملابس — طلب المالك 2026-11-07):
+# «حذف الجزء الذي سيتم دمجه من صورة المصدر ووضع الملابس من صورة المرجع مكانه
+#  ثم تعديل درجة الألوان والإضاءة والظل حتى تظهر وكأنها صورة واحدة».
+#
+# المدخل: صورة المصدر الحالية + قصاصة الملابس (على أبيض من extractGarmentOnWhite)
+#         + صندوق الشخص المستهدف (normalized) من كشف الأشخاص.
+# الخطوات: 1) استخراج ألفا للملابس من الخلفية البيضاء  2) ملاءمة الحجم داخل
+# الصندوق  3) _blend_onto — نقل لون/إضاءة/ظل/حبيبات + دمج هرمي (نفس عدّة
+# النقل المجربة) بمرجع لوني = منطقة الملابس القديمة نفسها (تحمل إضاءة المشهد).
+# الناتج: تركيبة تُمرَّر بعدها على نموذج التعديل للتنسيق النهائي (harmonize).
+# ============================================================================
+def _garment_cutout_from_white(gbgr):
+    """Garment RGBA cutout from a white-background product photo.
+
+    Returns (bgr, alpha) cropped to content, or None when the cutout is not
+    usable (no clear garment blob / covers everything)."""
+    import cv2
+    import numpy as np
+    gray = cv2.cvtColor(gbgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    # near-white -> transparent (soft ramp keeps anti-aliased edges alive)
+    soft = np.clip((240.0 - gray) * (255.0 / 40.0), 0, 255).astype(np.uint8)
+    _, hard = cv2.threshold(soft, 40, 255, cv2.THRESH_BINARY)
+    hard = _largest_component(hard, thresh=30)
+    if hard is None or hard.max() == 0:
+        return None
+    if float((hard > 0).mean()) > 0.92:  # background not white at all
+        return None
+    # close pinholes, fill the garment interior so internal white details
+    # (patterns, prints) stay opaque, then forbid anything outside it
+    closed = cv2.morphologyEx(hard, cv2.MORPH_CLOSE,
+                              cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11)))
+    cnts, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not cnts:
+        return None
+    solid = np.zeros_like(closed)
+    cv2.drawContours(solid, [max(cnts, key=cv2.contourArea)], -1, 255, -1)
+    alpha = cv2.bitwise_and(cv2.max(soft, solid), solid)
+    if float((alpha > 128).mean()) < 0.02:
+        return None
+    k = max(3, int(0.02 * max(alpha.shape)) | 1)
+    alpha = cv2.GaussianBlur(alpha, (k, k), 0)
+    ys, xs = np.where(alpha > 20)
+    if len(xs) < 50:
+        return None
+    m = 2
+    x0, y0 = max(0, int(xs.min()) - m), max(0, int(ys.min()) - m)
+    x1, y1 = min(alpha.shape[1] - 1, int(xs.max()) + m), min(alpha.shape[0] - 1, int(ys.max()) + m)
+    return gbgr[y0:y1 + 1, x0:x1 + 1].copy(), alpha[y0:y1 + 1, x0:x1 + 1].copy()
+
+
+@app.post("/garment/composite")
+async def garment_composite(req: Request):
+    """Cut the old garment area out of the source and composite the reference
+    garment in its place with full scene harmonization (one-whole-image)."""
+    try:
+        body = await req.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid JSON body"}, status_code=400)
+    from starlette.concurrency import run_in_threadpool
+    return await run_in_threadpool(_garment_composite_impl, body)
+
+
+def _garment_composite_impl(body: dict):
+    import cv2
+    import numpy as np
+    try:
+        src_data = body.get("source")
+        gar_data = body.get("garment")
+        bbox = body.get("bbox")
+        if not src_data or not gar_data or not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+            return JSONResponse(
+                {"ok": False, "error": "source, garment and bbox[4] are required"}, status_code=400)
+        src = _load_image(src_data)
+        gar = _load_image(gar_data)
+        if src is None or gar is None:
+            return JSONResponse({"ok": False, "error": "decode failed"}, status_code=400)
+        H, W = src.shape[:2]
+        x1n, y1n, x2n, y2n = [float(v) for v in bbox]
+        bx = max(0, min(W - 8, int(round(x1n * W))))
+        by = max(0, min(H - 8, int(round(y1n * H))))
+        bw = max(8, min(W - bx, int(round((x2n - x1n) * W))))
+        bh = max(8, min(H - by, int(round((y2n - y1n) * H))))
+
+        cut = _garment_cutout_from_white(gar)
+        if cut is None:
+            return JSONResponse({"ok": False, "error": "garment cutout failed"})
+        gar_bgr, gar_alpha = cut
+        gh, gw = gar_bgr.shape[:2]
+
+        # ملاءمة: عرض الصندوق كاملًا مع سقف ارتفاع 1.45×، وتعليق من أعلى
+        # الصندوق (الملابس تتدلى من الكتفين).
+        scale = bw / float(gw)
+        if gh * scale > 1.45 * bh:
+            scale = (1.45 * bh) / float(gh)
+        tw, th = max(8, int(gw * scale)), max(8, int(gh * scale))
+        tx = bx + (bw - tw) // 2
+        ty = by + int(0.03 * bh)
+
+        # المرجع اللوني = منطقة الملابس القديمة نفسها في المصدر (تحمل إضاءة
+        # المشهد ودرجته الحرارية وظله) — هنا تُلصق القطعة فتتلوَّن كجزء أصلي.
+        color_ref = src[by:by + bh, bx:bx + bw].copy()
+        if color_ref.size == 0:
+            color_ref = None
+
+        dst = src.copy()
+        dst = _blend_onto(dst, gar_bgr, gar_alpha, (tx, ty, tw, th),
+                          color_strength=0.72, context_pad=0.5,
+                          pad_frac=0.55, levels=5, color_ref=color_ref)
+        return {"ok": True, "image": _encode_png(dst)}
+    except Exception as e:
+        traceback.print_exc()
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
 if __name__ == "__main__":
     import uvicorn
 

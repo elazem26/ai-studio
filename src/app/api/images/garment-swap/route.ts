@@ -376,7 +376,8 @@ async function verifySwapResult(
   resultDataUrl: string,
   sourceDataUrl: string,
   garmentDescription: string,
-  targetWho?: string | null
+  targetWho?: string | null,
+  compositeDataUrl?: string | null
 ): Promise<{ score: number; reason: string; oldOutfitVisible: boolean }> {
   try {
     const response = await withTimeout(zai.chat.completions.createVision({
@@ -396,6 +397,11 @@ Evaluate:
 2. Is the new garment (${garmentDescription.slice(0, 100)}...) clearly visible in Image 2?
 3. CRITICAL: Can you still see ANY part of the original outfit from Image 1 in Image 2 — INCLUDING the original lower garment (pants, skirt, shorts)? (layering failure)
 4. LOWER PIECE CHECK: If the new garment description includes a lower piece (shorts/pants/skirt/bottom), does the person's lower garment in Image 2 MATCH the described lower piece (same color/length/style)? Mark oldOutfitVisible=true if the result still shows the ORIGINAL lower garment from Image 1, or an invented bottom that does not match the description.
+5. GHOST/FADE CHECK: Does the new garment look SEMI-TRANSPARENT, faded or washed-out — like a translucent overlay ghosted ON TOP of the original outfit (old outfit visible THROUGH the new one, double-exposure look)? Mark oldOutfitVisible=true if yes.${
+  compositeDataUrl
+    ? `\n6. DESIGN-DRIFT CHECK (Image 3 = the mechanically composited photo BEFORE harmonization — the ground truth of garment placement/design): Does the garment in Image 2 keep the SAME design, color, pattern, type and coverage as in Image 3? If the harmonization step REPAINTED or redesigned the garment (different color, different garment type, different pattern), mark oldOutfitVisible=true.`
+    : ""
+}
 
 Output JSON only:
 {
@@ -408,6 +414,9 @@ Output JSON only:
             },
             { type: "image_url", image_url: { url: sourceDataUrl } },
             { type: "image_url", image_url: { url: resultDataUrl } },
+            ...(compositeDataUrl
+              ? [{ type: "image_url", image_url: { url: compositeDataUrl } }]
+              : []),
           ],
         },
       ],
@@ -436,6 +445,76 @@ Output JSON only:
 function isContentFilterError(e: unknown): boolean {
   const msg = String((e as Error)?.message ?? e ?? "");
   return /content (filter|policy)|safety|blocked|Sensitive|flagged|1301|contentFilter/i.test(msg);
+}
+
+/**
+ * Cut-out + place + harmonize (طلب المالك 2026-11-07): يُقص الجزء القديم من
+ * صورة المصدر ويوضع مكان الملابس من المرجع عبر الخدمة المصغّرة
+ * (/garment/composite — نقل ألوان/إضاءة/ظل/حبيبات + دمج هرمي)، ثم تُمرَّر
+ * التركيبة على نموذج التعديل للتنسيق النهائي. يعيد null عند أي فشل
+ * فيسقط المسار تلقائيًا إلى استبدال كامل عبر البرومبت فقط.
+ */
+async function compositeGarment(
+  currentDataUrl: string,
+  garmentDataUrl: string,
+  bbox: [number, number, number, number]
+): Promise<string | null> {
+  try {
+    const res = await fetch(`${MINI_SERVICE_URL}/garment/composite`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source: currentDataUrl, garment: garmentDataUrl, bbox }),
+      signal: AbortSignal.timeout(120_000),
+    });
+    const d: any = await res.json().catch(() => ({}));
+    if (!res.ok || !d?.ok || typeof d?.image !== "string") {
+      console.warn("[garment-swap] composite unavailable:", d?.error || res.status);
+      return null;
+    }
+    return d.image as string;
+  } catch (e) {
+    console.warn("[garment-swap] composite call failed:", e);
+    return null;
+  }
+}
+
+/**
+ * Harmonize prompt — المرحلة الثانية من نهج «قص وركّب ثم نسّق»: التركيبة
+ * الميكانيكية تحتاج فقط إلى دمج بصري (إضاءة/ظلال/حواف) وليس إعادة تصميم،
+ * فمهمة النموذج أسهل بكثير من الاستبدال الكامل ومنع ظهور «الصورة الباهتة
+ * فوق المصدر» من DESIGN: الملابس موجودة فعلًا داخل الصورة.
+ */
+function buildHarmonizePrompt(
+  level: 1 | 2,
+  garmentDescription: string,
+  targetClause: string
+): string {
+  const base = `This photo was assembled by digitally compositing a real garment (${garmentDescription.slice(0, 160)}) onto a person. Your ONLY job is SEAMLESS INTEGRATION — make the whole image look like ONE single photograph taken with one camera in one moment.
+
+HARMONIZE the composited garment:
+- Match lighting direction, color temperature, exposure and contrast between the garment and the rest of the photo
+- Paint realistic contact shadows where the garment meets the body, and natural fabric folds and drape consistent with the pose
+- Remove all paste artifacts: hard cut edges, color shifts, brightness jumps, halo/flat-pasted look
+- Blend the garment edges into the body and background naturally
+
+STRICT PRESERVATION RULES:
+- Do NOT change the garment's design, color, pattern, length, sleeves or coverage — keep it exactly as composited
+- The garment is OPAQUE fabric actually WORN by the person — never fade it, ghost it, or make it translucent
+- Do NOT add any other clothing layer on top of or under it
+- Preserve exactly: face, facial features, expression, skin, pose, hands, hair, background, camera angle, other people`;
+
+  if (level === 1) {
+    return `${base}${targetClause}\n\nRESULT: a photorealistic photo where nobody can tell the garment was composited.`;
+  }
+
+  return `${base}
+
+STRONGER INTEGRATION (level 2):
+- If the garment currently looks faded, washed-out, translucent or ghosted over the body — rebuild it as SOLID opaque fabric with full contrast and true colors
+- If any part of the ORIGINAL outfit (collar, sleeves, hem, pants) is still visible next to or under the new garment, extend the new garment to cover it completely — ONLY the new garment is worn
+- Sharpen realistic details: weave texture, seams, buttons, wrinkles following body curvature, shadows between folds${targetClause}
+
+RESULT: a photorealistic photo where nobody can tell the garment was composited.`;
 }
 
 /** Error carrying an HTTP status for uniform response mapping. */
@@ -616,32 +695,91 @@ async function runSwapPipeline(
     const targetClause = multiPerson ? buildTargetClause(sp, srcPersons) : "";
 
     // --------------------------------------------------------------
-    // Working try-on flow (cloud-ai-adapter): level prompts + VLM
-    // verification on attempts 1-2 (old outfit AND bottom-garment
-    // match); the last attempt always ships. Max 3 attempts only on
-    // API errors.
+    // TWO-PHASE SWAP (طلب المالك 2026-11-07: «حذف الجزء القديم ووضع
+    // الملابس من المرجع مكانه ثم تعديل الألوان والإضاءة والظل حتى
+    // تظهر وكأنها صورة واحدة»):
+    //   PHASE 1 (deterministic): cut the reference garment out and
+    //   composite it OVER the old garment region in the source — the
+    //   mini-service transfers color/lighting/shadow/grain and
+    //   pyramid-blends the edges. The garment is now PHYSICALLY in the
+    //   photo — a faded ghost overlay is impossible by construction.
+    //   PHASE 2 (AI): one harmonize edit pass — integrate shadows/folds/
+    //   seams so it reads as one photograph. Attempt 3 falls back to the
+    //   original prompt-only replacement path (pre-2026-11-07 flow).
     // --------------------------------------------------------------
+    onStage?.(
+      `composite-${mappingNo}`,
+      `قصّ الملابس القديمة وتركيب الجديدة مكانها (${mappingNo}/${mappings.length})…`,
+      `Cut-out & composite garment (${mappingNo}/${mappings.length})…`,
+      30 + ((mappingNo - 1) / mappings.length) * 8
+    );
+    const compositeDataUrl = await compositeGarment(currentImg.dataUrl, refInfo.garmentUrl, sp.bbox);
+
     let success = false;
     let attempts = 0;
     let finalRejected = false;
 
     while (!success && attempts < 3) {
       attempts++;
+      // Attempts 1-2: harmonize the mechanical composite (garment already
+      // in place). Attempt 3 (only if verification kept failing): the
+      // original prompt-only full replacement from the un-composited image.
+      const useComposite = !!compositeDataUrl && attempts <= 2;
       onStage?.(
         `edit-${mappingNo}-${attempts}`,
-        `توليد الملابس الجديدة (${mappingNo}/${mappings.length})…`,
-        `Generating new garment (${mappingNo}/${mappings.length})…`,
+        useComposite
+          ? `تنسيق الملابس الجديدة داخل الصورة (${mappingNo}/${mappings.length})…`
+          : `توليد الملابس الجديدة (${mappingNo}/${mappings.length})…`,
+        useComposite
+          ? `Harmonizing new garment (${mappingNo}/${mappings.length})…`
+          : `Generating new garment (${mappingNo}/${mappings.length})…`,
         40 + ((mappingNo - 1) / mappings.length) * 45
       );
-      const prompt = buildTryOnPrompt(attempts as 1 | 2 | 3, refInfo.description, true, targetClause);
+      const baseDataUrl = useComposite ? compositeDataUrl! : currentImg.dataUrl;
+      const prompt = useComposite
+        ? buildHarmonizePrompt(attempts as 1 | 2, refInfo.description, targetClause)
+        : buildTryOnPrompt(3, refInfo.description, true, targetClause);
       // FRAME-LOCK: pre-stretch the person photo to the EXACT canvas
       // aspect so the edit backend cannot center-crop it (edge loss bug).
-      const imgForAi = await fitToCanvasAspect(currentImg.dataUrl, sizeW, sizeH);
-      // images array: first = the photo being edited; second = the
-      // extracted garment reference. Sent on EVERY attempt — the visual
-      // reference is the strongest signal for replicating the exact
-      // outfit (especially the lower piece).
-      const images: Array<{ url: string }> = [{ url: imgForAi }, { url: refInfo.garmentUrl }];
+      const imgForAi = await fitToCanvasAspect(baseDataUrl, sizeW, sizeH);
+      // Harmonize attempt 2 also receives the extracted garment as a
+      // second reference so the integration keeps the EXACT design and
+      // colors. Prompt-only path keeps both images (reference is the
+      // strongest signal for replicating the outfit).
+      const images: Array<{ url: string }> = useComposite && attempts >= 2
+        ? [{ url: imgForAi }, { url: refInfo.garmentUrl }]
+        : [{ url: imgForAi }];
+
+      let edited: Buffer;
+      let attemptDataUrl: string;
+
+      if (compositeDataUrl && attempts === 3) {
+        // BOTH harmonize passes failed verification (the edit model tends
+        // to REPAINT the garment instead of just integrating it). Ship the
+        // RAW COMPOSITE instead of an AI repaint: it contains the REAL
+        // reference garment pixels, already color/lighting/shadow/grain
+        // matched and pyramid-blended by the mini-service — exactly the
+        // owner's request (ملابس المرجع بمكانها وبتنسيق لوني وإضاءة).
+        onStage?.(
+          `ship-${mappingNo}`,
+          `اعتماد التركيبة المباشرة عالية الدقة (${mappingNo}/${mappings.length})…`,
+          `Shipping faithful composite (${mappingNo}/${mappings.length})…`,
+          60 + ((mappingNo - 1) / mappings.length) * 30
+        );
+        edited = await sharp(Buffer.from(compositeDataUrl!.slice(compositeDataUrl!.indexOf(",") + 1), "base64"))
+          .resize(sendImg.w, sendImg.h, { fit: "fill", kernel: "lanczos3" })
+          .png()
+          .toBuffer();
+        attemptDataUrl = compositeDataUrl!;
+        finalRejected = true; // AI polish rejected — deterministic result shipped
+        success = true;
+        resultBuf = edited;
+        console.warn(
+          `[garment-swap] mapping ${mappingNo}: both harmonize passes rejected — shipping the raw composite (garment-faithful)`
+        );
+        currentImg = { dataUrl: attemptDataUrl, w: sendImg.w, h: sendImg.h };
+        continue;
+      }
 
       let outB64: string | undefined;
       try {
@@ -667,17 +805,17 @@ async function runSwapPipeline(
       // INVERSE-STRETCH: cancel the pre-stretch — result returns to the
       // source's exact dimensions (true body proportions, full field of
       // view, output size == input size).
-      const edited = await sharp(editedRaw)
+      edited = await sharp(editedRaw)
         .resize(sendImg.w, sendImg.h, { fit: "fill", kernel: "lanczos3" })
         .png()
         .toBuffer();
       const outB64Fixed = edited.toString("base64");
 
-      const attemptDataUrl = `data:image/png;base64,${outB64Fixed}`;
+      attemptDataUrl = `data:image/png;base64,${outB64Fixed}`;
 
-      // VLM verification — on attempts 1 and 2 (checks old outfit AND
-      // that the lower garment matches the reference); the last attempt
-      // always ships.
+      // VLM verification — on attempts 1 and 2 (checks old outfit, ghost/
+      // fade overlay, and — for harmonized composites — that the garment
+      // DESIGN was not repainted); the last attempt always ships.
       if (attempts <= 2) {
         onStage?.(
           `verify-${mappingNo}`,
@@ -690,7 +828,8 @@ async function runSwapPipeline(
           attemptDataUrl,
           currentImg.dataUrl,
           refInfo.description,
-          multiPerson ? personPositionName(sp, srcPersons) : null
+          multiPerson ? personPositionName(sp, srcPersons) : null,
+          useComposite ? compositeDataUrl : null
         );
         if (verification.oldOutfitVisible && attempts < 3) {
           finalRejected = true;

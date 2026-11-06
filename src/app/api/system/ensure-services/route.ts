@@ -2,16 +2,19 @@ import { NextResponse } from "next/server";
 import path from "path";
 import os from "os";
 import { findMiniServiceScript, miniServiceRoot } from "@/lib/mini-service";
+import { existsSync } from "fs";
 import { getPythonBin, spawnSafe } from "@/lib/python-bin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const MINI_SERVICE_HEALTH = "http://localhost:3030/health";
+const REMOVER_SERVICE_HEALTH = "http://localhost:3031/health";
 // Resolve the LIVE mini-services copy at request time (not extracted/, not a
 // hardcoded path) so the spawned service always runs the latest code and is
 // found even when the server cwd is .next/standalone.
 const GUARDIAN_SCRIPT = path.join(process.cwd(), "scripts", "face-swap-guardian.py");
+const REMOVER_SCRIPT = path.join(process.cwd(), "mini-services", "object-remover", "server.py");
 
 async function isServiceUp(): Promise<boolean> {
   try {
@@ -29,6 +32,33 @@ async function isGuardianUp(): Promise<boolean> {
       resolve(!err && stdout.trim().length > 0);
     });
   });
+}
+
+async function isRemoverUp(): Promise<boolean> {
+  try {
+    const r = await fetch(REMOVER_SERVICE_HEALTH, { signal: AbortSignal.timeout(1500) });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function spawnRemover(): Promise<number | null> {
+  try {
+    if (!existsSync(REMOVER_SCRIPT)) return null;
+  } catch { /* ignore */ }
+  const proc = spawnSafe(
+    getPythonBin(),
+    [REMOVER_SCRIPT],
+    {
+      cwd: path.dirname(REMOVER_SCRIPT),
+      detached: true,
+      stdio: "ignore",
+      env: { ...process.env, PYTHONUNBUFFERED: "1" },
+    }
+  );
+  proc.unref();
+  return proc.pid ?? null;
 }
 
 async function spawnService(): Promise<number | null> {
@@ -80,9 +110,11 @@ export async function GET() {
   const startedAt = Date.now();
   const serviceUpBefore = await isServiceUp();
   const guardianUpBefore = await isGuardianUp();
+  const removerUpBefore = await isRemoverUp();
 
   let servicePid: number | null = null;
   let guardianPid: number | null = null;
+  let removerPid: number | null = null;
 
   // Spawn the service if down
   let serviceUpAfter = serviceUpBefore;
@@ -109,6 +141,26 @@ export async function GET() {
     } catch {
       // ignore
     }
+  }
+
+  // object-remover (port 3031): mask-based LaMa inpainting for "إزالة كائن".
+  // Spawn + warm the ONNX session so the first brush removal is fast.
+  let removerUpAfter = removerUpBefore;
+  if (!removerUpBefore) {
+    try {
+      removerPid = await spawnRemover();
+      for (let i = 0; i < 10; i++) {
+        await new Promise((r) => setTimeout(r, 1000));
+        if (await isRemoverUp()) { removerUpAfter = true; break; }
+      }
+    } catch { /* ignore */ }
+  } else {
+    removerUpAfter = true;
+  }
+  if (removerUpAfter) {
+    fetch("http://localhost:3031/warm", { signal: AbortSignal.timeout(5000) })
+      .then(() => {})
+      .catch(() => {});
   }
 
   // PRELOAD MODELS in the background (fire-and-forget). Without this the
@@ -142,6 +194,12 @@ export async function GET() {
       wasUp: guardianUpBefore,
       spawnedJustNow: !!guardianPid,
       pid: guardianPid,
+    },
+    remover: {
+      wasUp: removerUpBefore,
+      isUp: removerUpAfter,
+      spawnedJustNow: !!removerPid,
+      pid: removerPid,
     },
     elapsedMs,
     ok: serviceUpAfter,

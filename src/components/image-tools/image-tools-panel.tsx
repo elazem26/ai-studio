@@ -14,6 +14,7 @@ import { TargetSelector } from "@/components/shared/target-selector";
 import { SaveButton } from "@/components/shared/save-button";
 import { ProgressIndicator } from "@/components/shared/progress-indicator";
 import { CropOverlay, type CropRect } from "./crop-overlay";
+import { MaskBrushOverlay } from "./mask-brush-overlay";
 
 interface LocalImage { path: string; url: string; width: number; height: number; name: string; }
 const SECTION_ID = "image-tools";
@@ -86,6 +87,7 @@ export function ImageToolsPanel() {
   const [uploading, setUploading] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [cropMode, setCropMode] = useState(false);
+  const [maskMode, setMaskMode] = useState(false); // brush mask for object removal
   const [imgDisplayRect, setImgDisplayRect] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
   // === Image Convert state ===
   const [imgConvFile, setImgConvFile] = useState<File | null>(null);
@@ -494,6 +496,37 @@ export function ImageToolsPanel() {
   const handleFilter = async () => { if (!image) return; setBusy("filter"); try { const r = await fetch("/api/images/filters", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sourcePath: image.path, filter: filterType }) }); const d = await r.json(); if (r.ok) { updateImage(d); toast({ title: locale === "ar" ? "تم تطبيق الفلتر" : "Filtered" }); } else toast({ title: "Error", description: d.error || d.message, variant: "destructive" }); } finally { setBusy(null); } };
   const handleRemoveBg = async () => { if (!image) return; setBusy("rm-bg"); try { const r = await fetch("/api/images/remove-background", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sourcePath: image.path, backgroundColor: rmBgColor }) }); const d = await r.json(); if (r.ok) { updateImage(d); toast({ title: locale === "ar" ? "تم إزالة الخلفية" : "BG Removed" }); } else toast({ title: "Error", description: d.error || d.message, variant: "destructive" }); } finally { setBusy(null); } };
   const handleRemoveObj = async () => { if (!image) return; setBusy("rm-obj"); try { const r = await fetch("/api/images/remove-object", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sourcePath: image.path, objectDescription: rmObjDesc || "an unwanted object" }) }); const d = await r.json(); if (r.ok) { updateImage(d); toast({ title: locale === "ar" ? "تم إزالة الكائن" : "Object Removed" }); } else toast({ title: "Error", description: d.error || d.message, variant: "destructive" }); } finally { setBusy(null); } };
+
+  // Brush-mask removal: the overlay exports a full-resolution PNG mask of the
+  // painted object. Local LaMa inpainting regenerates ONLY the masked region —
+  // the rest of the photo stays pixel-identical (tattoo without harming the
+  // hand, earring with the earlobe behind it reconstructed).
+  const handleRemoveObjMask = async (maskDataUrl: string) => {
+    if (!image) return;
+    setBusy("rm-obj");
+    try {
+      const r = await fetch("/api/images/remove-object", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sourcePath: image.path, maskDataUrl, growPx: 6, featherPx: 4 }) });
+      const d = await r.json();
+      if (r.ok) {
+        updateImage(d);
+        setMaskMode(false);
+        toast({ title: locale === "ar" ? "تم إزالة الكائن" : "Object Removed", description: `${d.method === "lama" ? "LaMa" : "OpenCV"} · ${d.width}×${d.height}` });
+      } else toast({ title: "Error", description: d.error || d.message, variant: "destructive" });
+    } catch (e) {
+      toast({ title: "Error", description: locale === "ar" ? "فشل الاتصال أثناء الإزالة" : "Connection failed during removal", variant: "destructive" });
+    } finally { setBusy(null); }
+  };
+
+  const openMaskMode = () => {
+    if (!image) return;
+    const el = imgElRef.current;
+    if (el) {
+      const r = el.getBoundingClientRect();
+      setImgDisplayRect({ width: r.width, height: r.height });
+    }
+    setZoom(1); // overlay alignment requires zoom=1 (same rule as crop)
+    setMaskMode(true);
+  };
   const handleWatermark = async () => { if (!image) return; setBusy("watermark"); try { const r = await fetch("/api/images/watermark", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sourcePath: image.path, text: wmText, opacity: wmOpacity / 100, position: "bottom-right" }) }); const d = await r.json(); if (r.ok) { updateImage(d); toast({ title: locale === "ar" ? "تمت العلامة المائية" : "Watermarked" }); } else toast({ title: "Error", description: d.error || d.message, variant: "destructive" }); } finally { setBusy(null); } };
   const handleAiGenerate = async () => {
     if (!aiGenPrompt.trim() || busy === "ai-gen") return;
@@ -665,6 +698,21 @@ export function ImageToolsPanel() {
                         locale={locale}
                         onConfirm={(rect) => void handleCrop(rect)}
                         onCancel={() => setCropMode(false)}
+                      />
+                    )}
+                    {/* Brush-mask overlay for object removal (same alignment
+                        rules as CropOverlay: rendered inside the image-sized
+                        wrapper, zoom locked to 1 while active) */}
+                    {maskMode && imgDisplayRect.width > 0 && (
+                      <MaskBrushOverlay
+                        imageWidth={image.width}
+                        imageHeight={image.height}
+                        displayWidth={imgDisplayRect.width}
+                        displayHeight={imgDisplayRect.height}
+                        locale={locale}
+                        busy={busy === "rm-obj"}
+                        onConfirm={(maskDataUrl) => void handleRemoveObjMask(maskDataUrl)}
+                        onCancel={() => setMaskMode(false)}
                       />
                     )}
                   </div>
@@ -1048,10 +1096,28 @@ export function ImageToolsPanel() {
             <Button size="sm" onClick={handleRemoveBg} disabled={!image || busy !== null} className="w-full h-9 text-[11px] bg-cyan-accent text-black hover:bg-cyan-accent/90">{busy === "rm-bg" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Eraser className="h-3.5 w-3.5" />}{locale === "ar" ? "أزل الخلفية" : "Remove"}</Button>
           </CardContent></Card>
 
-          {/* REMOVE OBJECT */}
+          {/* REMOVE OBJECT — brush mask + local LaMa inpainting */}
           <Card className="studio-panel border-panel-border"><CardHeader className="py-2"><CardTitle className="text-xs flex items-center gap-2"><Eraser className="h-4 w-4" style={{ color: "var(--accent-cyan)" }} />{locale === "ar" ? "إزالة كائن" : "Remove Obj"}</CardTitle></CardHeader><CardContent className="space-y-2">
-            <input type="text" value={rmObjDesc} onChange={(e) => setRmObjDesc(e.target.value)} placeholder={locale === "ar" ? "ما الذي تريد إزالته؟" : "What to remove?"} className="w-full h-8 text-[10px] bg-black/30 border border-cyan-accent/30 rounded px-2" />
-            <Button size="sm" onClick={handleRemoveObj} disabled={!image || busy !== null} className="w-full h-9 text-[11px] bg-cyan-accent text-black hover:bg-cyan-accent/90">{busy === "rm-obj" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Eraser className="h-3.5 w-3.5" />}{locale === "ar" ? "أزل الكائن" : "Remove"}</Button>
+            <p className="text-[10px] text-muted-foreground leading-relaxed">
+              {locale === "ar"
+                ? "لوّن الكتابة أو الشعار أو الوشم أو الحلق… بالفرشاة وسيُزال مع ترميم ما خلفه — دون المساس ببقية الصورة."
+                : "Paint text / logo / tattoo / earring… and it gets removed with what's behind it reconstructed — the rest of the photo is untouched."}
+            </p>
+            <Button size="sm" onClick={openMaskMode} disabled={!image || busy !== null} className="w-full h-9 text-[11px] bg-cyan-accent text-black hover:bg-cyan-accent/90">
+              {busy === "rm-obj" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Brush className="h-3.5 w-3.5" />}
+              {locale === "ar" ? "فرشاة التحديد والإزالة" : "Brush select & remove"}
+            </Button>
+            {maskMode && (
+              <p className="text-[10px] text-muted-foreground text-center">
+                {locale === "ar" ? "لوّن الكائن على الصورة ثم اضغط «إزالة المحدد» — استخدم «إزالة تحديد» لتصحيح الزيادة" : "Paint the object then click Remove — use Erase to fix over-selection"}
+              </p>
+            )}
+            {/* Fallback: description-only AI removal (whole-image edit) */}
+            <details className="text-[9px]">
+              <summary className="cursor-pointer text-muted-foreground">{locale === "ar" ? "إزالة بالوصف (AI) — للصورة كاملة" : "AI description removal — whole image"}</summary>
+              <input type="text" value={rmObjDesc} onChange={(e) => setRmObjDesc(e.target.value)} placeholder={locale === "ar" ? "ما الذي تريد إزالته؟" : "What to remove?"} className="w-full h-8 text-[10px] bg-black/30 border border-cyan-accent/30 rounded px-2 mt-1" />
+              <Button size="sm" onClick={handleRemoveObj} disabled={!image || busy !== null} className="w-full h-8 text-[10px] mt-1">{locale === "ar" ? "إزالة بالذكاء الاصطناعي" : "Remove with AI"}</Button>
+            </details>
           </CardContent></Card>
 
           {/* WATERMARK */}

@@ -18,6 +18,73 @@ const TITLES: Record<ComposerBox, { title: string; hint: string }> = {
 /** زوم 0..100 → مقياس 1.0 (كل الصور كاملة ظاهرة داخل المربع) .. 3.0 */
 const scaleOf = (zoom: number) => 1 + (zoom / 100) * 2;
 
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024; // 25MB — نفس حد الخادم
+
+// كشف الصيغة من البايتات — الآيفون قد يرسل HEIC بنوع image/* والخادم يرفضه،
+// وبعض المتصفحات ترسل type فارغًا لملفات صحيحة — فنفسنص بناءً على المحتوى.
+const SNIFF: { magic: (b: Uint8Array) => boolean }[] = [
+  { magic: (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff }, // jpeg
+  { magic: (b) => b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47 }, // png
+  { magic: (b) => b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46 }, // gif
+  { magic: (b) => b[0] === 0x42 && b[1] === 0x4d }, // bmp
+  { magic: (b) => b[0] === 0x49 && b[1] === 0x49 && b[2] === 0x2a }, // tiff II
+  { magic: (b) => b[0] === 0x4d && b[1] === 0x4d && b[2] === 0x00 }, // tiff MM
+  { magic: (b) => b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 && b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50 }, // webp
+];
+
+/** "ok" = صورة مدعومة، "heic" = HEIC/HEIF/AVIF (غير مدعومة من الخادم)، "unknown" = غير معروف */
+async function sniffImage(file: File): Promise<"ok" | "heic" | "unknown"> {
+  try {
+    const head = new Uint8Array(await file.slice(0, 16).arrayBuffer());
+    if (head.length >= 12 && String.fromCharCode(...head.slice(4, 8)) === "ftyp") {
+      const brand = String.fromCharCode(...head.slice(8, 12)).toLowerCase();
+      if (/^(heic|heix|hevc|mif1|msf1|avif)/.test(brand)) return "heic";
+    }
+    return SNIFF.some((s) => s.magic(head)) ? "ok" : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+/** رسالة خطأ عربية واضحة من استجابة الرفع — لا نعرض مفاتيح الترجمة الخام أبدًا */
+function uploadErrorMessage(status: number, d: any): string {
+  if (status === 413) return "الصورة أكبر من 25 ميجابايت — صغّر حجمها ثم أعد المحاولة";
+  if (status === 415) return d?.message || "صيغة الصورة غير مدعومة — استخدم JPG أو PNG أو WEBP";
+  if (status === 400) return d?.message || "تعذّر قراءة الصورة — تأكد أن الملف صورة سليمة";
+  if (status === 401 || status === 403) return "انتهت الجلسة — حدّث الصفحة ثم أعد المحاولة";
+  return d?.message || "فشل الرفع — أعد المحاولة";
+}
+
+/** رفع ملف واحد مع إعادة محاولة تلقائية عند انقطاع الشبكة أو أخطاء الخادم المؤقتة */
+async function uploadOne(file: File): Promise<any> {
+  let lastMsg = "فشل الرفع — أعد المحاولة";
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, attempt === 1 ? 800 : 2000));
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const r = await fetch("/api/images/upload", { method: "POST", body: fd });
+      if (r.status >= 500) {
+        lastMsg = "خطأ مؤقت في الخادم — جارٍ إعادة المحاولة…";
+        continue;
+      }
+      const d = await r.json().catch(() => null);
+      if (!r.ok || !d?.url) {
+        lastMsg = uploadErrorMessage(r.status, d);
+        if (r.status >= 500) continue;
+        throw new Error(lastMsg);
+      }
+      return d;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "";
+      // خطأ شبكة حقيقي → أعد المحاولة؛ خطأ أعمال (رمينا من uploadErrorMessage) → أوقف فورًا
+      if (msg && !/Failed to fetch|NetworkError|Load failed|network/i.test(msg)) throw e;
+      lastMsg = "تعذر الاتصال بالخادم — تحقق من الإنترنت وأعد المحاولة";
+    }
+  }
+  throw new Error(lastMsg);
+}
+
 /**
  * مربع صورة الوكيل — يدعم:
  *  - تعدد الصور في المصدر/المرجع (حتى 4 صور لكل مربع، نقر = تحديد).
@@ -66,22 +133,48 @@ export function ComposerImageBox({ box }: { box: ComposerBox }) {
   const doRedo = () => (isMulti ? multiRedo(box as "source" | "reference") : boxRedo("result"));
   const doClear = () => (isMulti ? clearMultiBox(box as "source" | "reference") : clearBox("result"));
 
-  // ---------- رفع صورة (يدعم عدة ملفات دفعة واحدة) ----------
+  // ---------- رفع صورة (يدعم عدة ملفات دفعة واحدة + تحقق + إعادة محاولة) ----------
   const upload = useCallback(
     async (files: File[]) => {
-      const imgs = files.filter((f) => f.type.startsWith("image/"));
-      if (!imgs.length) {
+      if (!files.length) {
         toast.error("اختر ملف صورة صالحًا");
         return;
       }
+      // حد المربع المتعدد — تنبيه فوري بدل تجاهل صامت. مربع النتيجة يستبدل
+      // الصورة بالملف الجديد تلقائيًا (setImage) فلا نمنعه أبدًا.
+      const used = isMulti ? (multi?.items.length ?? 0) : 0;
+      const free = isMulti ? 4 - used : 1;
+      if (free <= 0) {
+        toast.warning(`الحد الأقصى 4 صور في «${title}» — احذف صورة أولًا ثم أعد الرفع`);
+        return;
+      }
+      const picked = files.slice(0, free);
+      const imgs: File[] = [];
+      for (const f of picked) {
+        if (f.size <= 0) {
+          toast.error(`«${f.name}» ملف فارغ`);
+          continue;
+        }
+        if (f.size > MAX_UPLOAD_BYTES) {
+          toast.error(`«${f.name}» أكبر من 25 ميجابايت — صغّر حجمها ثم أعد المحاولة`);
+          continue;
+        }
+        const sniff = await sniffImage(f);
+        if (sniff === "heic") {
+          toast.error(`«${f.name}» بصيغة HEIC غير المدعومة — حوّلها إلى JPG ثم أعد الرفع`);
+          continue;
+        }
+        if (sniff === "unknown" && !f.type.startsWith("image/")) {
+          toast.error(`«${f.name}» ليس ملف صورة صالحًا`);
+          continue;
+        }
+        imgs.push(f);
+      }
+      if (!imgs.length) return; // رسائل الخطأ أُظهرت أعلاه لكل ملف
       setUploading(true);
       try {
         for (const file of imgs) {
-          const fd = new FormData();
-          fd.append("file", file);
-          const r = await fetch("/api/images/upload", { method: "POST", body: fd });
-          const d = await r.json();
-          if (!r.ok) throw new Error(d?.error ?? "فشل الرفع");
+          const d = await uploadOne(file);
           if (isMulti) addItem(box as "source" | "reference", d);
           else setImage("result", d, "upload");
         }
@@ -92,7 +185,7 @@ export function ComposerImageBox({ box }: { box: ComposerBox }) {
         setUploading(false);
       }
     },
-    [box, isMulti, addItem, setImage, title]
+    [box, isMulti, multi, addItem, setImage, title]
   );
 
   // ---------- تحسين الجودة (على الصورة المحددة / صورة النتيجة) ----------
@@ -245,7 +338,7 @@ export function ComposerImageBox({ box }: { box: ComposerBox }) {
       >
         {items.length ? (
           <div
-            className={`absolute inset-0 p-1.5 ${gridCols} gap-1.5 overflow-auto`}
+            className={`absolute inset-0 p-1.5 ${gridCols} auto-rows-fr gap-1.5 overflow-auto`}
             style={{
               transform: `scale(${scale}) translate(${pan.x / Math.max(scale, 1)}px, ${pan.y / Math.max(scale, 1)}px)`,
               transformOrigin: "center center",
@@ -255,7 +348,7 @@ export function ComposerImageBox({ box }: { box: ComposerBox }) {
             {items.map((img, i) => (
               <div
                 key={`${img.id}-${i}`}
-                className={`relative min-h-0 rounded-lg border overflow-hidden bg-background/60 ${
+                className={`relative min-h-[104px] rounded-lg border overflow-hidden bg-background/60 ${
                   isMulti && i === selectedIdx ? "border-cyan-500 ring-2 ring-cyan-500/40" : "border-border/70"
                 }`}
                 onClick={() => isMulti && selectItem(box as "source" | "reference", i)}
@@ -296,6 +389,21 @@ export function ComposerImageBox({ box }: { box: ComposerBox }) {
               >
                 <Plus className="h-5 w-5" />
                 <span className="text-[10px]">إضافة</span>
+              </button>
+            )}
+            {box === "result" && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  fileRef.current?.click();
+                }}
+                className="rounded-lg border border-dashed border-border flex flex-col items-center justify-center gap-1 text-muted-foreground hover:text-foreground hover:border-cyan-500/50 transition-colors min-h-[64px]"
+                aria-label="استبدال الصورة"
+                title="رفع صورة بديلة مكان النتيجة الحالية"
+              >
+                <Plus className="h-5 w-5" />
+                <span className="text-[10px]">استبدال</span>
               </button>
             )}
           </div>

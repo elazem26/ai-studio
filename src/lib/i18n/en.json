@@ -15,7 +15,8 @@
     "agents": "AI Agents",
     "faceSwap": "Face Swap",
     "videoEditor": "Video Editor",
-    "navHint": "Choose a tool to start"
+    "navHint": "Choose a tool to start",
+    "contentComposer": "Content Add"
   },
   "navDescriptions": {
     "studio": "Virtual try-on with AI",
@@ -26,7 +27,8 @@
     "imageTools": "Enhance, fix, transform images",
     "agents": "Conversational AI agents",
     "faceSwap": "Swap faces between photos",
-    "videoEditor": "Edit & trim video clips"
+    "videoEditor": "Edit & trim video clips",
+    "contentComposer": "Merge two people into one scene via an AI agent (understand → analyze → apply)"
   },
   "projects": {
     "title": "Projects",

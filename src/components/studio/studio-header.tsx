@@ -44,6 +44,7 @@ import {
   Rocket,
   Github,
   Wrench,
+  ImagePlus,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
@@ -68,6 +69,7 @@ import { cn } from "@/lib/utils";
 const TABS = [
   { key: "studio", icon: Shirt, label: "nav.studio", desc: "navDescriptions.studio", section: "studio", adminOnly: false },
   { key: "imageTools", icon: Wand2, label: "nav.imageTools", desc: "navDescriptions.imageTools", section: "image-tools", adminOnly: false },
+  { key: "contentComposer", icon: ImagePlus, label: "nav.contentComposer", desc: "navDescriptions.contentComposer", section: null, adminOnly: false },
   { key: "faceSwap", icon: Users, label: "nav.faceSwap", desc: "navDescriptions.faceSwap", section: "studio", adminOnly: false },
   { key: "garmentEditor", icon: Sparkles, label: "nav.garmentEditor", desc: "navDescriptions.garmentEditor", section: "garment-editor", adminOnly: false },
   { key: "videoEditor", icon: Video, label: "nav.videoEditor", desc: "navDescriptions.videoEditor", section: "video-editor", adminOnly: false },

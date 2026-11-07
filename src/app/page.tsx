@@ -16,6 +16,7 @@ import { SystemPrivacyPanel } from "@/components/system/system-privacy-panel";
 import { DeveloperPanel } from "@/components/system/developer-panel";
 import { GarmentEditorPanel } from "@/components/garment-editor/garment-editor-panel";
 import { ImageToolsPanel } from "@/components/image-tools/image-tools-panel";
+import { ContentComposerPanel } from "@/components/content-composer/content-composer-panel";
 import { FaceSwapPanel } from "@/components/face-swap/face-swap-panel";
 import { VideoEditorPanel } from "@/components/video-editor/video-editor-panel";
 import { AgentsPanel } from "@/components/agents/agents-panel";
@@ -78,6 +79,7 @@ export default function Home() {
           </>
         )}
         {activeTab === "imageTools" && <ImageToolsPanel />}
+        {activeTab === "contentComposer" && <ContentComposerPanel />}
         {activeTab === "faceSwap" && <FaceSwapPanel />}
         {activeTab === "garmentEditor" && <GarmentEditorPanel />}
         {activeTab === "videoEditor" && <VideoEditorPanel />}

@@ -130,6 +130,15 @@ def restart_web(reason: str) -> None:
     if not os.path.exists(script):
         log(f"[web] start-production.sh missing! ({reason})")
         return
+    # double-spawn guard: another start-production.sh already brings the web up
+    # (two guardians / restart racing on this 4GB box caused EADDRINUSE loops)
+    try:
+        r = subprocess.run(["pgrep", "-f", "start-production.sh"], capture_output=True, text=True, timeout=5)
+        if r.returncode == 0 and r.stdout.strip():
+            log(f"[web] down ({reason}) — but a start-production.sh is already running (pid {r.stdout.split()[0]}), skipping spawn")
+            return
+    except Exception:
+        pass
     log(f"[web] down ({reason}) — running start-production.sh")
     # start-production.sh ends with `exec bun server.js`, so it keeps running
     # as the web server itself. Logs go to data/web-restart.log.

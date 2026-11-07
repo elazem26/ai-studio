@@ -5,6 +5,7 @@ import { persist, createJSONStorage } from "zustand/middleware";
 export type TabKey =
   | "studio"
   | "imageTools"
+  | "contentComposer"
   | "faceSwap"
   | "garmentEditor"
   | "modelManager"

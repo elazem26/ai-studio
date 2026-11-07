@@ -30,6 +30,11 @@ import { logEvent } from "@/lib/logger";
 import { promises as fs } from "fs";
 import path from "path";
 import sharp from "sharp";
+import { execFile as execFileCb } from "child_process";
+import { promisify } from "util";
+
+const execFile = promisify(execFileCb);
+const sleepMs = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const RESULTS_ROOT = path.resolve(process.cwd(), "data/results");
 
@@ -266,7 +271,7 @@ export interface SmartVideoJob {
   model: string;
   taskId: string | null;
   backend?: string;
-  result: { url: string; remoteUrl: string; coverUrl: string; sizeMB: number } | null;
+  result: { url: string; remoteUrl: string; coverUrl: string; sizeMB: number; format?: string; hasSpeech?: boolean; hasMusic?: boolean } | null;
   errorMessage?: string;
   startedAt: number;
   updatedAt: number;
@@ -274,6 +279,10 @@ export interface SmartVideoJob {
   lastGatewayQueryAt?: number;
   /** Retry countdown info for the UI (when create is backing off a 429) */
   retryNote?: string;
+  /** خيارات ما بعد التوليد: تعليق صوتي + موسيقى خلفية + صيغة الملف */
+  speech?: { text: string; voice?: string };
+  music?: boolean;
+  format?: "mp4" | "webm" | "gif";
 }
 
 type VideoJobGlobal = { smartVideoJobs?: Map<string, SmartVideoJob> };
@@ -327,13 +336,29 @@ function is429(e: unknown): boolean {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function createVideoTask(prompt: string): Promise<{ taskId: string; backend: string }> {
+/** خيارات إنشاء مهمة الفيديو — صورة→فيديو لحفظ الملامح + جودة/مدة/مقاس/صوت */
+export interface VideoCreateOpts {
+  prompt: string;
+  /** صورة الإطار الأول (data URL) — توليد من صورة يحافظ على ملامح الأشخاص */
+  imageDataUrl?: string;
+  quality?: "speed" | "quality";
+  size?: string;
+  fps?: number;
+  duration?: number;
+  withAudio?: boolean;
+}
+
+async function createVideoTask(opts: VideoCreateOpts): Promise<{ taskId: string; backend: string }> {
   const zhipu = await zhipuApiKey();
   if (zhipu) {
+    const body: Record<string, unknown> = { model: "cogvideox-3", prompt: opts.prompt };
+    if (opts.imageDataUrl) body.image_url = opts.imageDataUrl;
+    if (opts.quality) body.quality = opts.quality;
+    if (opts.withAudio !== undefined) body.with_audio = opts.withAudio;
     const res = await fetch("https://open.bigmodel.cn/api/paas/v4/videos/generations", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${zhipu}` },
-      body: JSON.stringify({ model: "cogvideox-3", prompt }),
+      body: JSON.stringify(body),
       signal: AbortSignal.timeout(30_000),
     });
     if (!res.ok) {
@@ -355,7 +380,15 @@ async function createVideoTask(prompt: string): Promise<{ taskId: string; backen
   for (let attempt = 0; attempt < DELAYS.length; attempt++) {
     if (DELAYS[attempt]) await sleep(DELAYS[attempt]);
     try {
-      const createRes = (await zai.video.generations.create({ prompt } as never)) as {
+      const createRes = (await zai.video.generations.create({
+        prompt: opts.prompt,
+        ...(opts.imageDataUrl ? { image_url: opts.imageDataUrl } : {}),
+        ...(opts.quality ? { quality: opts.quality } : {}),
+        ...(opts.size ? { size: opts.size } : {}),
+        ...(opts.fps ? { fps: opts.fps } : {}),
+        ...(opts.duration ? { duration: opts.duration } : {}),
+        ...(opts.withAudio !== undefined ? { with_audio: opts.withAudio } : {}),
+      } as never)) as {
         id?: string; task_id?: string; taskId?: string;
       };
       const taskId = createRes?.id || createRes?.task_id || createRes?.taskId;
@@ -420,6 +453,23 @@ async function queryVideoTask(taskId: string, backend: string): Promise<{
 export async function startSmartVideoJob(opts: {
   prompt: string;
   aspectRatio?: AspectRatio;
+  /** جودة التوليد: سرعة أو جودة قصوى */
+  quality?: "speed" | "quality";
+  /** مقاس العرض (مثل 1280x720) — الافتراضي حسب نسبة الأبعاد */
+  size?: string;
+  fps?: number;
+  /** مدة الفيديو بالثواني (5 أو 10) */
+  duration?: number;
+  /** توليد صوت/مؤثرات مع الفيديو */
+  withAudio?: boolean;
+  /** مسار صورة الإطار الأول (صورة→فيديو — يحفظ ملامح الأشخاص الحقيقية) */
+  imagePath?: string;
+  /** تعليق صوتي بالكلام (اللغة واللهجة تتبع النص المكتوب) */
+  speech?: { text: string; voice?: string };
+  /** موسيقى خلفية هادئة مولّدة محليًا */
+  music?: boolean;
+  /** صيغة الملف النهائي */
+  format?: "mp4" | "webm" | "gif";
 }): Promise<SmartVideoJob> {
   const jobId = `vid-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const job: SmartVideoJob = {
@@ -435,6 +485,9 @@ export async function startSmartVideoJob(opts: {
     result: null,
     startedAt: Date.now(),
     updatedAt: Date.now(),
+    speech: opts.speech?.text?.trim() ? { text: opts.speech.text.trim().slice(0, 900), voice: opts.speech.voice } : undefined,
+    music: !!opts.music,
+    format: opts.format === "webm" || opts.format === "gif" ? opts.format : "mp4",
   };
   smartVideoJobs.set(jobId, job);
 
@@ -446,7 +499,25 @@ export async function startSmartVideoJob(opts: {
       // [4] GENERATE — CogVideoX-3 (Zhipu public API or built-in gateway)
       setStage(job, "generating");
       job.retryNote = "جارٍ بدء مهمة الفيديو… (إن كان المولّد مشغولاً سنُعيد المحاولة تلقائياً)";
-      const { taskId, backend } = await createVideoTask(job.analysis.enhancedPrompt);
+      // صورة الإطار الأول: تخفيض الأبعاد لضمان قبول الحجم مع الحفاظ على الملامح
+      let imageDataUrl: string | undefined;
+      if (opts.imagePath) {
+        try {
+          const buf = await sharp(opts.imagePath).rotate().resize({ width: 1024, height: 1024, fit: "inside", withoutEnlargement: true }).jpeg({ quality: 85 }).toBuffer();
+          imageDataUrl = `data:image/jpeg;base64,${buf.toString("base64")}`;
+        } catch {
+          imageDataUrl = undefined;
+        }
+      }
+      const { taskId, backend } = await createVideoTask({
+        prompt: job.analysis.enhancedPrompt,
+        imageDataUrl,
+        quality: opts.quality,
+        size: opts.size,
+        fps: opts.fps,
+        duration: opts.duration,
+        withAudio: opts.withAudio,
+      });
       job.retryNote = undefined;
       job.taskId = taskId;
       job.backend = backend;
@@ -481,11 +552,128 @@ export async function startSmartVideoJob(opts: {
   return job;
 }
 
+// ============================================================
+// ما بعد التوليد: تعليق صوتي (TTS) + موسيقى خلفية + تحويل الصيغة
+// ============================================================
+
+async function ffprobeDuration(file: string): Promise<number> {
+  try {
+    const { stdout } = await execFile("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", file]);
+    const d = parseFloat(stdout.trim());
+    return Number.isFinite(d) ? d : 0;
+  } catch {
+    return 0;
+  }
+}
+
+async function hasAudioStream(file: string): Promise<boolean> {
+  try {
+    const { stdout } = await execFile("ffprobe", ["-v", "error", "-select_streams", "a", "-show_entries", "stream=index", "-of", "csv=p=0", file]);
+    return stdout.trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/** تعليق صوتي عبر TTS — اللغة واللهجة تتبع النص المكتوب نفسه */
+async function synthSpeech(outWav: string, speech: { text: string; voice?: string }): Promise<boolean> {
+  try {
+    const Z = (await import("z-ai-web-dev-sdk")).default;
+    const zai = await Z.create();
+    const response = (await zai.audio.tts.create({
+      input: speech.text.slice(0, 950),
+      voice: speech.voice || "tongtong",
+      speed: 1.0,
+      response_format: "wav",
+      stream: false,
+    } as never)) as { arrayBuffer: () => Promise<ArrayBuffer> };
+    const buf = Buffer.from(new Uint8Array(await response.arrayBuffer()));
+    if (buf.length < 100) return false;
+    await fs.writeFile(outWav, buf);
+    return true;
+  } catch (e) {
+    console.warn("[smart-generation] speech TTS failed (skipped):", e instanceof Error ? e.message : e);
+    return false;
+  }
+}
+
+/** موسيقى خلفية هادئة مولّدة محليًا (طبقة وتريات ناعمة — بدون أي خدمة خارجية) */
+async function synthMusic(outWav: string, durationSec: number): Promise<boolean> {
+  try {
+    const d = Math.max(3, Math.min(60, Math.ceil(durationSec || 10)));
+    await execFile("ffmpeg", [
+      "-y", "-hide_banner", "-loglevel", "error",
+      "-f", "lavfi", "-i", `sine=frequency=110:duration=${d}`,
+      "-f", "lavfi", "-i", `sine=frequency=164.81:duration=${d}`,
+      "-f", "lavfi", "-i", `sine=frequency=220:duration=${d}`,
+      "-f", "lavfi", "-i", `sine=frequency=277.18:duration=${d}`,
+      "-f", "lavfi", "-i", `sine=frequency=329.63:duration=${d}`,
+      "-filter_complex",
+      "[0:a][1:a][2:a][3:a][4:a]amix=inputs=5:normalize=1,tremolo=f=0.25:d=0.7,lowpass=f=850,aformat=sample_rates=44100:channel_layouts=stereo,volume=0.35[a]",
+      "-map", "[a]", outWav,
+    ]);
+    return true;
+  } catch (e) {
+    console.warn("[smart-generation] music synth failed (skipped):", e instanceof Error ? e.message : e);
+    return false;
+  }
+}
+
 /**
- * Poll one smart-video job; advances the z-ai task and, on SUCCESS,
- * downloads the mp4 into data/results so it is served locally
- * (the remote URL expires).
+ * يعالج الفيديو الخام بعد التنزيل ويكتب الناتج النهائي:
+ *   تعليق صوتي (TTS) + موسيقى خلفية + صوت الفيديو الأصلي (المؤثرات)
+ *   → دمجها معًا ثم تحويل الصيغة (mp4/webm/gif).
+ * mp4 بلا خيارات = نسخ مباشر بدون إعادة ترميز.
  */
+async function finalizeVideo(rawPath: string, job: SmartVideoJob, outPath: string): Promise<void> {
+  const fmt = job.format ?? "mp4";
+  const speechWav = job.speech?.text ? rawPath.replace(/-raw\.mp4$/, ".speech.wav") : "";
+  const musicWav = job.music ? rawPath.replace(/-raw\.mp4$/, ".music.wav") : "";
+
+  if (speechWav) await synthSpeech(speechWav, { text: job.speech!.text, voice: job.speech!.voice });
+  if (musicWav) await synthMusic(musicWav, await ffprobeDuration(rawPath));
+  const okSpeech = !!(speechWav && (await fs.stat(speechWav).then(() => true).catch(() => false)));
+  const okMusic = !!(musicWav && (await fs.stat(musicWav).then(() => true).catch(() => false)));
+  const needMix = okSpeech || okMusic;
+
+  // GIF: بلا صوت — لوحة ألوان من تمريرتين
+  if (fmt === "gif") {
+    const palette = rawPath.replace(/-raw\.mp4$/, ".palette.png");
+    await execFile("ffmpeg", ["-y", "-hide_banner", "-loglevel", "error", "-i", rawPath, "-vf", "fps=12,scale=640:-1:flags=lanczos,palettegen", palette]);
+    await execFile("ffmpeg", ["-y", "-hide_banner", "-loglevel", "error", "-i", rawPath, "-i", palette, "-lavfi", "fps=12,scale=640:-1:flags=lanczos[x];[x][1:v]paletteuse", "-loop", "0", outPath]);
+    return;
+  }
+
+  if (fmt === "mp4" && !needMix) {
+    await fs.copyFile(rawPath, outPath);
+    return;
+  }
+
+  const args: string[] = ["-y", "-hide_banner", "-loglevel", "error", "-i", rawPath];
+  const chains: string[] = [];
+  const mixInputs: string[] = [];
+  let ai = 1;
+  if (okSpeech) { args.push("-i", speechWav); chains.push(`[${ai}:a]volume=1.0[ps]`); mixInputs.push("[ps]"); ai++; }
+  if (okMusic) { args.push("-i", musicWav); chains.push(`[${ai}:a]volume=0.9[pm]`); mixInputs.push("[pm]"); ai++; }
+  // صوت الفيديو الأصلي (مؤثرات CogVideoX عند with_audio) بمستوى أخف عند وجود كلام
+  if (needMix && (await hasAudioStream(rawPath))) {
+    chains.push(`[0:a]volume=${okSpeech ? 0.6 : 0.9}[pv]`);
+    mixInputs.unshift("[pv]");
+  }
+
+  if (needMix) {
+    const filter = `${chains.join(";")};${mixInputs.join("")}amix=inputs=${mixInputs.length}:duration=longest:normalize=0[aout]`;
+    args.push("-filter_complex", filter, "-map", "0:v", "-map", "[aout]");
+  }
+  if (fmt === "webm") {
+    args.push("-c:v", "libvpx-vp9", "-b:v", "2M", "-c:a", needMix ? "libopus" : "", "-b:a", "128k", "-shortest");
+  } else {
+    args.push("-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest");
+  }
+  args.push(outPath);
+  await execFile("ffmpeg", args.filter(Boolean));
+}
+
 export async function pollSmartVideoJob(jobId: string): Promise<SmartVideoJob | undefined> {
   const job = smartVideoJobs.get(jobId);
   if (!job) return undefined;
@@ -506,6 +694,8 @@ export async function pollSmartVideoJob(jobId: string): Promise<SmartVideoJob | 
 
       if (st === "SUCCESS" && q.videoUrl) {
         setStage(job, "downloading");
+        job.stageLabelAr = "تنزيل الفيديو وإضافة الصوت والمؤثرات…";
+        job.stageLabelEn = "Downloading & mixing audio…";
         const remote = q.videoUrl;
         const cover = q.coverUrl || "";
         // download locally (remote URL expires)
@@ -513,19 +703,39 @@ export async function pollSmartVideoJob(jobId: string): Promise<SmartVideoJob | 
         if (!res.ok) throw new Error(`تنزيل الفيديو فشل (HTTP ${res.status})`);
         const buf = Buffer.from(await res.arrayBuffer());
         await fs.mkdir(RESULTS_ROOT, { recursive: true });
-        const fileName = `smart-video-${Date.now()}.mp4`;
-        await fs.writeFile(path.join(RESULTS_ROOT, fileName), buf);
+        const base = `smart-video-${Date.now()}`;
+        const rawPath = path.join(RESULTS_ROOT, `${base}-raw.mp4`);
+        await fs.writeFile(rawPath, buf);
 
+        // ما بعد التوليد: تعليق صوتي + موسيقى + صيغة — فشلها لا يُسقط النتيجة
+        let finalPath = rawPath;
+        try {
+          finalPath = path.join(RESULTS_ROOT, `${base}.${job.format ?? "mp4"}`);
+          await finalizeVideo(rawPath, job, finalPath);
+        } catch (e) {
+          console.warn("[smart-generation] video post-process failed, delivering raw mp4:", e instanceof Error ? e.message : e);
+          finalPath = rawPath;
+        }
+        // تنظيف الملفات الوسيطة والخام
+        for (const suffix of ["-raw.mp4", ".speech.wav", ".music.wav", ".palette.png"]) {
+          const f = path.join(RESULTS_ROOT, `${base}${suffix}`);
+          if (f !== finalPath) fs.unlink(f).catch(() => {});
+        }
+
+        const fbuf = await fs.stat(finalPath).catch(() => null);
         job.result = {
-          url: `/results/${fileName}`,
+          url: `/results/${path.basename(finalPath)}`,
           remoteUrl: remote,
           coverUrl: cover,
-          sizeMB: Math.round((buf.length / 1024 / 1024) * 10) / 10,
+          sizeMB: Math.round(((fbuf?.size ?? buf.length) / 1024 / 1024) * 10) / 10,
+          format: path.extname(finalPath).replace(".", "") || "mp4",
+          hasSpeech: !!job.speech?.text,
+          hasMusic: !!job.music,
         };
         setStage(job, "done");
         await logEvent({
           category: "system",
-          message: `Smart video gen OK: ${fileName} (${job.result.sizeMB}MB, ${Math.round((Date.now() - job.startedAt) / 1000)}s)`,
+          message: `Smart video gen OK: ${path.basename(finalPath)} (${job.result.sizeMB}MB, ${Math.round((Date.now() - job.startedAt) / 1000)}s)`,
         });
       } else if (st === "FAILED" || st === "ERROR") {
         job.errorMessage = "فشل مولّد الفيديو في إنتاج المقطع — جرّب وصفاً آخر.";

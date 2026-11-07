@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { Mic, MicOff, Send, Volume2, Loader2, Trash2, Brain, Eye, Wand2, CheckCircle2 } from "lucide-react";
-import { useComposerStore, type ComposerPhase } from "./store";
+import { useComposerStore, POSE_OPTIONS, type ComposerPhase } from "./store";
 
 const PHASES: { key: Exclude<ComposerPhase, "">; label: string; icon: typeof Brain }[] = [
   { key: "understand", label: "الفهم", icon: Eye },
@@ -67,12 +67,17 @@ export function ComposerChat() {
       const text = (raw ?? input).trim();
       if (!text || busy) return;
       const st = useComposerStore.getState();
-      const src = st.source.img;
-      const ref = st.reference.img;
+      const srcItems = st.source.items;
+      const refItems = st.reference.items;
       const res = st.result.img;
 
-      if (!src || !ref) {
-        addMessage({ role: "agent", text: "⚠ ارفع صورة المصدر وصورة المرجع أولًا (المربعان الأول والثاني)، ثم اطلب ما تريد." });
+      if (!srcItems.length && !refItems.length) {
+        addMessage({
+          role: "agent",
+          text:
+            "⚠ ارفع صورة واحدة على الأقل (أشخاصك في المصدر أو أشخاص آخرين في المرجع)، ثم اطلب ما تريد.\n" +
+            "يمكنك أيضًا ذكر اسم شخصية مشهورة في طلبك مع صورة شخصك — سأبحث عنها وأستخدم صورته الحقيقية.\nمثال: «اجعلني أصافح الرئيس فلان على شاطئ البحر بملابس البحر».",
+        });
         return;
       }
 
@@ -80,10 +85,18 @@ export function ComposerChat() {
       setInput("");
       setBusy(true);
 
+      const poseLabels = st.poses.map((id) => POSE_OPTIONS.find((p) => p.id === id)?.label ?? id).filter(Boolean);
+
       try {
         const body = res
-          ? { resultPath: res.path, instruction: text, size: st.size || undefined }
-          : { sourcePath: src.path, referencePath: ref.path, instruction: text, size: st.size || undefined };
+          ? { resultPath: res.path, instruction: text, size: st.size || undefined, poses: poseLabels }
+          : {
+              sourcePaths: srcItems.map((i) => i.path),
+              referencePaths: refItems.map((i) => i.path),
+              instruction: text,
+              size: st.size || undefined,
+              poses: poseLabels,
+            };
 
         const r = await fetch("/api/images/compose-agent", {
           method: "POST",
@@ -122,8 +135,10 @@ export function ComposerChat() {
               addMessage({
                 role: "agent",
                 text:
-                  `✅ تم بناء الصورة بنجاح${sd.result.method === "result-edit" ? " (تعديل على النتيجة السابقة)" : ""}.\n` +
-                  `اطلب الآن أي منظر أو وضعية أخرى وسأعدّل عليها — أو استخدم أزرار المربع: تحسين الجودة، حفظ، طباعة، رجوع وتقدم.`,
+                  `✅ تم بناء الصورة بنجاح${sd.result.method === "result-edit" ? " (تعديل على النتيجة السابقة)" : ""}` +
+                  (sd.result.searched?.length ? ` — استُخدمت صور حقيقية لـ: ${sd.result.searched.join("، ")}` : "") +
+                  (sd.result.lockNote ? `\n🔒 ${sd.result.lockNote}` : "") +
+                  `\nاطلب الآن أي منظر أو وضعية أخرى وسأعدّل عليها — أو استخدم أزرار المربع: تحسين الجودة، حفظ، طباعة، رجوع وتقدم.`,
                 detail: sd.result.prompt,
               });
               if (useComposerStore.getState().ttsEnabled) speak("تم بناء الصورة بنجاح", audioRef);
@@ -316,7 +331,7 @@ export function ComposerChat() {
               send();
             }
           }}
-          placeholder={recording ? "🎙 جاري التسجيل…" : "مثال: اجمعهما في صورة حفل زفافهما والزوجة بشعر أسود طويل ناعم"}
+          placeholder={recording ? "🎙 جاري التسجيل…" : "مثال: اجعلني أصافح الرئيس فلان على شاطئ البحر بملابس البحر — أو ادمجنا في صورة حفل زفافنا"}
           disabled={busy}
           className="flex-1"
           aria-label="نص الطلب"

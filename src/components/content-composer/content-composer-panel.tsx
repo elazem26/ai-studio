@@ -3,7 +3,8 @@
 import { ComposerImageBox } from "./image-box";
 import { ComposerChat } from "./composer-chat";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { useComposerStore } from "./store";
+import { Button } from "@/components/ui/button";
+import { useComposerStore, POSE_OPTIONS } from "./store";
 
 const SIZE_OPTIONS = [
   { value: "auto", label: "تلقائي — الوكيل يختار الأنسب" },
@@ -17,13 +18,18 @@ const SIZE_OPTIONS = [
 ];
 
 /**
- * تبويب «إضافة محتوى إلى الصورة» — وكيل دمج ذكي:
- * صورة مصدر (رجل) + صورة مرجع (امرأة) + دردشة نصية وصوتية
- * ← يبني صورة واحدة للمشهد المطلوب (مثل حفل الزفاف) مع المحافظة على الملامح.
+ * تبويب «إضافة محتوى إلى الصورة» — وكيل دمج ذكي متعدد (v2):
+ *  - عدة صور مصدر + عدة صور مرجعية (دمج أكثر من شخص من كل جهة).
+ *  - شخصيات بالاسم: اذكر الرئيس/الفنان في طلبك وسأبحث عن صورته الحقيقية.
+ *  - وضعيات جاهزة (تبادل الأحضان، القبلات، المصافحة...) + أي وضعية تكتبها.
+ *  - اختيار حجم الصورة + دردشة كتابة وصوت + قفل ملامح الوجوه الحقيقية.
+ *  - الأزرار السبعة تحت كل مربع مع إظهار كامل الصور دائمًا (fit-to-box).
  */
 export function ContentComposerPanel() {
   const size = useComposerStore((s) => s.size);
   const setSize = useComposerStore((s) => s.setSize);
+  const poses = useComposerStore((s) => s.poses);
+  const togglePose = useComposerStore((s) => s.togglePose);
 
   return (
     <div className="flex flex-col gap-3 flex-1 min-h-0">
@@ -32,7 +38,7 @@ export function ContentComposerPanel() {
         <div className="min-w-0">
           <h1 className="text-base sm:text-lg font-bold">➕ إضافة محتوى إلى الصورة</h1>
           <p className="text-xs text-muted-foreground">
-            اجمع شخصين في صورة واحدة لأي منظر تطلبه — عبر وكيل ذكي يفهم ويحلل ويطبّق، مع المحافظة على ملامح الوجه الحقيقية
+            دمج عدة أشخاص من عدة صور — أو مع أي شخصية تذكرها بالاسم — في صورة واقعية لأي منظر ووضعية، مع قفل ملامح الوجوه الحقيقية لكل شخص
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -51,6 +57,32 @@ export function ContentComposerPanel() {
           </Select>
         </div>
       </header>
+
+      {/* الوضعيات الجاهزة */}
+      <section className="studio-panel rounded-2xl border border-border bg-muted/20 px-3 py-2.5" aria-label="اختيار الوضعية">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs font-bold shrink-0">وضعية الأشخاص:</span>
+          {POSE_OPTIONS.map((p) => {
+            const active = poses.includes(p.id);
+            return (
+              <Button
+                key={p.id}
+                type="button"
+                size="sm"
+                variant={active ? "default" : "outline"}
+                className={`h-7 px-2.5 text-[11px] rounded-full ${active ? "" : "text-muted-foreground"}`}
+                onClick={() => togglePose(p.id)}
+                aria-pressed={active}
+                title={active ? "إلغاء اختيار الوضعية" : "اختيار الوضعية"}
+              >
+                <span aria-hidden="true">{p.emoji}</span>
+                {p.label}
+              </Button>
+            );
+          })}
+          <span className="text-[10px] text-muted-foreground">أو اكتب أي وضعية بنفسك في الدردشة</span>
+        </div>
+      </section>
 
       {/* المربعات الثلاثة */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">

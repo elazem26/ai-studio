@@ -5,12 +5,28 @@ import {
   pickSmartestProvider,
   type AspectRatio,
 } from "@/lib/ai/smart-generation";
+import { resolveFilePath } from "@/lib/security/resolve-file-path";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 const ASPECTS: AspectRatio[] = ["1:1", "16:9", "9:16", "4:3", "3:4"];
+
+/** أنماط العرض (طريقة العرض) — تُدمج في الوصف قبل التحليل */
+const STYLES: Record<string, string> = {
+  cinematic: "cinematic film look, dramatic lighting, anamorphic lens, film grain, shallow depth of field",
+  realistic: "ultra realistic documentary style, natural lighting, true-to-life colors, steady camera",
+  anime: "anime style animation, vivid colors, clean line art, expressive motion",
+  cartoon: "3D cartoon style, soft shading, playful lively motion",
+  ad: "polished commercial advertisement look, glossy lighting, dynamic camera moves",
+};
+
+const QUALITIES = ["speed", "quality"] as const;
+const FORMATS = ["mp4", "webm", "gif"] as const;
+const DURATIONS = [5, 10] as const;
+const FPSS = [30, 60] as const;
+const SIZES = ["1280x720", "1920x1080", "720x1280", "1024x1024"];
 
 /** GET — engine info, or poll a job: GET /api/video/ai-generate?jobId=... */
 export async function GET(req: NextRequest) {
@@ -55,13 +71,51 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const prompt = typeof body?.prompt === "string" ? body.prompt.trim() : "";
-    if (!prompt) {
+    const rawPrompt = typeof body?.prompt === "string" ? body.prompt.trim() : "";
+    if (!rawPrompt) {
       return NextResponse.json({ error: "prompt مطلوب" }, { status: 400 });
     }
     const aspectRatio = ASPECTS.includes(body?.aspectRatio) ? (body.aspectRatio as AspectRatio) : undefined;
 
-    const job = await startSmartVideoJob({ prompt, aspectRatio });
+    // نمط العرض (سينمائي / واقعي / ...) يُدمج في الوصف قبل التحليل
+    const styleAdd = STYLES[body?.style] ?? "";
+    const prompt = styleAdd ? `${rawPrompt}. Style: ${styleAdd}` : rawPrompt;
+
+    // صورة الإطار الأول (صورة→فيديو لحفظ الملامح) — مسار محلي صالح فقط
+    let imagePath: string | undefined;
+    if (typeof body?.imagePath === "string" && body.imagePath.trim()) {
+      try {
+        imagePath = await resolveFilePath(body.imagePath.trim());
+      } catch {
+        return NextResponse.json({ error: "صورة الإطار الأول غير موجودة" }, { status: 404 });
+      }
+    }
+
+    const quality = QUALITIES.includes(body?.quality) ? body.quality : undefined;
+    const format = FORMATS.includes(body?.format) ? body.format : undefined;
+    const duration = DURATIONS.includes(Number(body?.duration)) ? Number(body.duration) : undefined;
+    const fps = FPSS.includes(Number(body?.fps)) ? Number(body.fps) : undefined;
+    const size = SIZES.includes(body?.size) ? body.size : undefined;
+    const withAudio = typeof body?.withAudio === "boolean" ? body.withAudio : undefined;
+    const music = !!body?.music;
+    const speechText = typeof body?.speech?.text === "string" ? body.speech.text.trim() : "";
+    const speech = speechText
+      ? { text: speechText.slice(0, 900), voice: typeof body.speech?.voice === "string" ? body.speech.voice : undefined }
+      : undefined;
+
+    const job = await startSmartVideoJob({
+      prompt,
+      aspectRatio,
+      quality,
+      size,
+      fps,
+      duration,
+      withAudio,
+      imagePath,
+      speech,
+      music,
+      format,
+    });
     return NextResponse.json({ ok: true, jobId: job.jobId, model: job.model });
   } catch (e) {
     return NextResponse.json(

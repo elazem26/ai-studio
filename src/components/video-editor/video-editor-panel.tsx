@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { Loader2, UploadCloud, Download, Trash2, X, Sparkles, RefreshCw, Sun, Settings, Clock, Zap, CheckCircle2, Scissors, Film, Hash, Timer, Plus, Merge, Crop, AlertTriangle, ArrowRight, Users, Shirt, Link2, ArrowLeft, ScanFace } from "lucide-react";
 import { SessionToolbar } from "@/components/shared/session-toolbar";
+import { AiVideoGeneratorCard } from "@/components/video-editor/ai-video-card";
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 
@@ -1086,8 +1087,8 @@ export function VideoEditorPanel() {
     <div className="flex flex-col gap-3">
       <SessionToolbar section="video-editor" onResetState={onReset} onRestoreState={onRestore} getSnapshot={getSnapshot} />
 
-      {/* === SMART VIDEO GENERATOR (AI) — read → analyze → think → generate === */}
-      <SmartVideoGeneratorCard isAr={isAr} />
+      {/* === AI VIDEO GENERATOR — صور الأشخاص ← مشهد بملامح حقيقية ← فيديو بالصوت === */}
+      <AiVideoGeneratorCard isAr={isAr} />
 
       {/* === Service tabs (only one active at a time) === */}
       <div className="grid grid-cols-7 gap-1 p-1.5 rounded-md bg-muted/30 ring-1 ring-cyan-accent/20">
@@ -2594,184 +2595,3 @@ function VideoSwapService({
   );
 }
 
-// ============================================================
-// SmartVideoGeneratorCard — التوليد الذكي للفيديو
-// Pipeline: قراءة الطلب ← تحليل ← تفكير ← توليد (CogVideoX-3) ← تسليم
-// Talks to /api/video/ai-generate (async job + polling).
-// ============================================================
-
-interface SmartVideoJobState {
-  jobId: string;
-  status: "thinking" | "generating" | "downloading" | "done" | "error";
-  percent: number;
-  stageLabelAr: string;
-  stageLabelEn: string;
-  analysis: {
-    understanding?: string;
-    analysis?: string;
-    reasoning?: string;
-    enhancedPrompt?: string;
-    provider?: string;
-  } | null;
-  model?: string;
-  result: { url: string; coverUrl: string; sizeMB: number } | null;
-  retryNote?: string;
-  errorMessage?: string;
-  elapsedSec?: number;
-}
-
-function SmartVideoGeneratorCard({ isAr }: { isAr: boolean }) {
-  const { toast } = useToast();
-  const [prompt, setPrompt] = useState("");
-  const [aspect, setAspect] = useState<"16:9" | "9:16" | "1:1">("16:9");
-  const [starting, setStarting] = useState(false);
-  const [job, setJob] = useState<SmartVideoJobState | null>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // Poll the job while it is active
-  useEffect(() => {
-    if (!job || job.status === "done" || job.status === "error") {
-      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
-      return;
-    }
-    if (pollRef.current) return;
-    pollRef.current = setInterval(async () => {
-      try {
-        const r = await fetch(`/api/video/ai-generate?jobId=${encodeURIComponent(job.jobId)}`);
-        const d = await r.json().catch(() => null);
-        if (r.ok && d?.ok) {
-          setJob((prev) => (prev && prev.jobId === d.jobId ? { ...prev, ...d } : prev));
-        } else if (r.status === 404) {
-          if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
-        }
-      } catch { /* transient — keep polling */ }
-    }, 4000);
-    return () => {
-      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
-    };
-  }, [job?.jobId, job?.status, job]);
-
-  const start = async () => {
-    if (!prompt.trim() || starting) return;
-    setStarting(true);
-    setJob({
-      jobId: "pending", status: "thinking", percent: 5,
-      stageLabelAr: "القراءة والتحليل والتفكير…", stageLabelEn: "Reading, analyzing & thinking…",
-      analysis: null, result: null,
-    });
-    try {
-      const r = await fetch("/api/video/ai-generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: prompt.trim(), aspectRatio: aspect }),
-      });
-      const d = await r.json().catch(() => null);
-      if (r.ok && d?.ok) {
-        setJob((prev) => (prev ? { ...prev, jobId: d.jobId, model: d.model } : prev));
-      } else {
-        setJob(null);
-        toast({ title: "Error", description: d?.error || d?.message || (isAr ? "تعذّر بدء التوليد — حاول مجدداً" : "Failed to start"), variant: "destructive" });
-      }
-    } catch (e) {
-      setJob(null);
-      toast({ title: "Error", description: e instanceof Error ? e.message : "network", variant: "destructive" });
-    } finally {
-      setStarting(false);
-    }
-  };
-
-  const stageIdx = job
-    ? job.status === "thinking" ? 0 : job.status === "generating" ? 1 : job.status === "downloading" ? 2 : job.status === "done" ? 3 : -1
-    : -1;
-  const STAGE_LABELS = isAr
-    ? ["قراءة الطلب وتحليله", "التفكير بكتابة المشهد والحركة", "توليد الفيديو", "التسليم"]
-    : ["Read & analyze request", "Think: scene & motion", "Generate video", "Deliver"];
-
-  return (
-    <Card className="studio-panel border-cyan-accent/40">
-      <CardHeader className="py-2">
-        <CardTitle className="text-sm flex items-center gap-2">
-          <Film className="h-4 w-4 text-cyan-accent" />
-          {isAr ? "التوليد الذكي للفيديو" : "Smart Video Generation"}
-          <span className="text-[9px] font-normal text-muted-foreground">{isAr ? "يقرأ ← يحلل ← يفكر ← يولّد" : "read → analyze → think → generate"}</span>
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-2">
-        <textarea
-          value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
-          placeholder={isAr
-            ? "اكتب فكرة الفيديو بحرية — المولد الذكي يحوّلها لمشهد احترافي بحركة كاميرا مدروسة…"
-            : "Describe your video idea freely — the smart engine turns it into a professional scene…"}
-          className="w-full h-20 text-[11px] bg-black/30 border border-cyan-accent/30 rounded p-2 resize-none"
-        />
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1">
-            {(["16:9", "9:16", "1:1"] as const).map((a) => (
-              <button key={a} onClick={() => setAspect(a)} className={`h-6 px-2 rounded text-[9px] font-mono transition ${aspect === a ? "bg-cyan-accent/20 text-cyan-accent ring-1 ring-cyan-accent/50" : "bg-muted/30 text-muted-foreground hover:bg-muted/50"}`}>{a}</button>
-            ))}
-          </div>
-          <Button size="sm" onClick={start} disabled={starting || !prompt.trim() || (!!job && job.status !== "done" && job.status !== "error")} className="flex-1 h-9 text-[11px] bg-cyan-accent text-black hover:bg-cyan-accent/90">
-            {starting || (job && job.status !== "done" && job.status !== "error") ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-            {isAr ? "ولّد الفيديو ذكياً" : "Smart Generate Video"}
-          </Button>
-        </div>
-
-        {/* Pipeline stages */}
-        {job && (
-          <div className="space-y-1">
-            <div className="h-1.5 w-full rounded-full bg-muted/60 overflow-hidden">
-              <div className="h-full bg-cyan-accent/80 rounded-full transition-all duration-500" style={{ width: `${job.percent}%` }} />
-            </div>
-            <div className="grid grid-cols-4 gap-1">
-              {STAGE_LABELS.map((label, i) => (
-                <div key={i} className={`flex items-center gap-1 text-[9px] ${stageIdx > i ? "text-cyan-accent" : stageIdx === i ? "text-cyan-accent" : "text-muted-foreground/50"}`}>
-                  {stageIdx > i ? <CheckCircle2 className="h-2.5 w-2.5" /> : stageIdx === i ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : "○"}
-                  <span className="truncate">{label}</span>
-                </div>
-              ))}
-            </div>
-            <p className="text-[9px] text-muted-foreground">
-              {isAr ? job.stageLabelAr : job.stageLabelEn}
-              {job.elapsedSec ? ` · ${job.elapsedSec}${isAr ? "ث" : "s"}` : ""}
-            </p>
-            {job.retryNote && <p className="text-[9px] text-amber-300/90">⏳ {job.retryNote}</p>}
-          </div>
-        )}
-
-        {/* Analysis breakdown */}
-        {job?.analysis?.enhancedPrompt && (
-          <div className="rounded-md bg-black/30 border border-cyan-accent/20 p-2 space-y-1 text-[9px] leading-relaxed">
-            <div className="font-bold text-cyan-accent">{isAr ? "تحليل الطلب" : "Request analysis"}</div>
-            {job.analysis.understanding && <p><span className="text-cyan-accent/80">{isAr ? "الفهم:" : "Understood:"}</span> {job.analysis.understanding}</p>}
-            {job.analysis.analysis && <p><span className="text-cyan-accent/80">{isAr ? "التحليل:" : "Analysis:"}</span> {job.analysis.analysis}</p>}
-            {job.analysis.reasoning && <p><span className="text-cyan-accent/80">{isAr ? "التفكير:" : "Reasoning:"}</span> {job.analysis.reasoning}</p>}
-            <p className="text-muted-foreground" dir="ltr"><span className="text-cyan-accent/80">Prompt:</span> {job.analysis.enhancedPrompt}</p>
-          </div>
-        )}
-
-        {/* Error */}
-        {job?.status === "error" && (
-          <div className="rounded-md bg-red-500/10 border border-red-500/30 p-2 text-[10px] text-red-300 flex items-center gap-1.5">
-            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-            {job.errorMessage || (isAr ? "فشل التوليد" : "Generation failed")}
-          </div>
-        )}
-
-        {/* Result video player */}
-        {job?.result?.url && (
-          <div className="space-y-1.5">
-            <video src={job.result.url} controls playsInline className="w-full max-h-[420px] rounded-md bg-black/60" />
-            <div className="flex items-center gap-2">
-              <span className="text-[9px] text-muted-foreground">{isAr ? `النتيجة · ${job.result.sizeMB}MB` : `Result · ${job.result.sizeMB}MB`}</span>
-              <div className="flex-1" />
-              <a href={job.result.url} download={`smart-video-${Date.now()}.mp4`}>
-                <Button size="sm" variant="outline" className="h-8 text-[10px]"><Download className="h-3.5 w-3.5" />{isAr ? "تنزيل" : "Download"}</Button>
-              </a>
-            </div>
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}

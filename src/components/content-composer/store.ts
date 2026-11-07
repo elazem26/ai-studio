@@ -1,6 +1,7 @@
 "use client";
 
 import { create } from "zustand";
+import { persist, createJSONStorage } from "zustand/middleware";
 import type { UploadedImage } from "@/stores/image-store";
 
 /**
@@ -67,7 +68,9 @@ interface ComposerState {
   resetAll: () => void;
 }
 
-export const useComposerStore = create<ComposerState>((set, get) => {
+export const useComposerStore = create<ComposerState>()(
+  persist(
+    (set, get) => {
   const patchBox = (box: ComposerBox, patch: Partial<BoxState>) =>
     set((s) => ({ ...s, [box]: { ...s[box], ...patch } }) as Pick<ComposerState, ComposerBox>);
 
@@ -144,7 +147,24 @@ export const useComposerStore = create<ComposerState>((set, get) => {
     setActiveTaskId: (activeTaskId) => set({ activeTaskId }),
     resetAll: () => set({ source: emptyBox(), reference: emptyBox(), result: emptyBox(), messages: [], size: "", busy: false, phase: "", progress: 0, activeTaskId: null }),
   };
-});
+    },
+    {
+      name: "content-composer-store",
+      storage: createJSONStorage(() => localStorage),
+      // نحفظ الصور والرسائل والمقاس حتى لا يفقد المستخدم عمله عند إعادة
+      // تحميل الصفحة أو التنقل بين التبويبات (نفس أسلوب متجر الاستوديو).
+      // busy/phase/progress/activeTaskId لا تُحفظ — مهام عابرة.
+      partialize: (s) => ({
+        source: s.source,
+        reference: s.reference,
+        result: s.result,
+        messages: s.messages.slice(-40),
+        size: s.size,
+        ttsEnabled: s.ttsEnabled,
+      }),
+    }
+  )
+);
 
 /** تحويل نتيجة أي API صور إلى UploadedImage لتخزينها في المربعات */
 export function toUploadedImage(r: { url: string; path: string; width?: number; height?: number; size?: number }, name?: string): UploadedImage {

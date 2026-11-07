@@ -138,7 +138,7 @@ export async function POST(req: NextRequest) {
 
       const buildPrompt = (m: "compose" | "edit") =>
         m === "compose"
-          ? `${prompt}\n- The two people come from the two provided photos; place BOTH of them together in the SAME scene.\n- Preserve both faces exactly, match lighting and perspective, seamless natural result, no borders, no collage.`
+          ? `${prompt}\n- The two people come from the two provided photos; place BOTH of them together in the SAME scene.\n- CHANGE both people's clothing and hairstyle exactly as the scene requires (e.g. wedding attire: the man in his described suit, the woman in her described dress and hairstyle) — while keeping their FACES and identity exactly identical.\n- Match lighting and perspective, seamless natural result, no borders, no collage.`
           : `${prompt}\n- Edit this existing photo of the two people; keep both faces exactly identical, seamless natural result.`;
 
       const isCF = (e: unknown): boolean => {

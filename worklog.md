@@ -602,3 +602,9 @@ Stage Summary:
 - **GitHub Release v5.6.0** (id 436924505): أصل AI-Studio-Desktop-v5.6.0.zip (956MB) — التحميل المباشر يعمل (302 → CDN). الرابط الثابت: /releases/download/v5.6.0/AI-Studio-Desktop-v5.6.0.zip — وlatest/ يعمل أيضاً.
 - **الزر الداخلي** «تشغيل من الكمبيوتر»: download/AI-Studio-v5.6.0.tar.gz (957MB) جاهزة لـ /api/system/download-pc (DOWNLOAD_DIR=download ✓).
 - سكربتات جديدة: scripts/git-push-live.sh، build-desktop-package.sh، gh-create-release.sh.
+
+## 2026-11-07 — تحديث الجلسة (guardian v3 + استعادة النموذج)
+- الحارس face-swap-guardian.py → **v3**: يراقب الآن :3000 و:3030 و:**3031** (object-remover) ويشغّلها تلقائيًا عند تعطلها — يُطلق من instrumentation ضمن شجرة عملية الويب لضمان بقائه.
+- استعادة `data/models/lama_fp32.onnx` (208MB من HF Carve/LaMa-ONNX) بعد إعادة تدوير البيئة، و`modelFound=true` و`model=ready`.
+- اختبار محرك شامل: مربع داكن 30 → خلفية 197، و**فرق البكسلات خارج القناع = 0** (method=lama، 4.5s).
+- دفع الالتزامات المتراكمة إلى origin/main والتحقق من الخدمات الثلاث 200.

@@ -413,6 +413,99 @@ export async function cleanSessionMedia(dryRun = false) {
   return out;
 }
 
+// ============================================================================
+// DEDUPE — إزالة التكرارات من ملفات الجلسة (بالهاش) ومن السكربتات المكررة
+// (متطلب المالك 2026-11-08: عند إنهاء الجلسة تُحذف الوسائط وتُزال كل
+//  التكرارات في الملفات والسكربت)
+// ============================================================================
+
+async function sha256(p: string): Promise<string> {
+  const { createHash } = await import("crypto");
+  return new Promise((resolve) => {
+    const hash = createHash("sha256");
+    const stream = createReadStream(p);
+    stream.on("data", (d) => hash.update(d));
+    stream.on("end", () => resolve(hash.digest("hex")));
+    stream.on("error", () => resolve(""));
+  });
+}
+
+/**
+ * إزالة الملفات المكررة (محتوى متطابق SHA-256) من مجلدات وسائط الجلسة.
+ * استثناء: face-swap-multi-* (ثلاث نسخ مقصودة تعرضها واجهة التبديل المتعدد).
+ */
+export async function dedupeSessionMedia(dryRun = false) {
+  const out = { scanned: 0, removed: 0, freedKB: 0 };
+  const seen = new Map<string, string>(); // hash → أول مسار (يُحتفظ به)
+  for (const root of [MEDIA_DIRS.results, MEDIA_DIRS.uploads]) {
+    const files = (await fs.readdir(root).catch(() => [] as string[])).sort();
+    for (const f of files) {
+      if (f.startsWith("face-swap-multi-")) continue; // نسخ مقصودة للواجهة
+      const p = path.join(root, f);
+      const st = await fs.stat(p).catch(() => null);
+      if (!st || !st.isFile()) continue;
+      out.scanned++;
+      const h = await sha256(p);
+      if (!h) continue;
+      const first = seen.get(h);
+      if (first) {
+        out.removed++;
+        out.freedKB += Math.round(st.size / 1024);
+        if (!dryRun) await fs.unlink(p).catch(() => {});
+      } else {
+        seen.set(h, p);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * إزالة السكربتات المكررة من scripts/:
+ *  - أسماء تدل على التكرار ((copy)/(1)/.bak/.old/~/-copy) ومحتواها مطابق لملف آخر.
+ *  - أو أي ملفين بنفس الاسم بعد إزالة اللاحقة ومحتوى متطابق.
+ * محافظة: لا تُحذف أي نسخة إلا إذا كان محتواها متطابقًا تمامًا (SHA-256).
+ */
+export async function dedupeScripts(dryRun = false) {
+  const out = { scanned: 0, removed: 0, freedKB: 0 };
+  const scriptsDir = path.join(PROJECT, "scripts");
+  const DUP_NAME = /(\(\d+\)|\(copy\)|-copy|\.bak|\.old|~)/i;
+  const files = (await fs.readdir(scriptsDir, { withFileTypes: true }).catch(() => [] as any[])).filter(
+    (e) => e.isFile() && /\.(py|ts|mjs|js|sh|cjs)$/.test(e.name)
+  );
+  const hashes = new Map<string, string>(); // hash → أقدم مسار
+  const byBase = new Map<string, { name: string; p: string; h: string }>();
+  for (const f of files) {
+    const p = path.join(scriptsDir, f.name);
+    out.scanned++;
+    const h = await sha256(p);
+    if (!h) continue;
+    const st = await fs.stat(p).catch(() => null);
+    const kb = Math.round((st?.size ?? 0) / 1024);
+
+    const base = f.name.replace(DUP_NAME, "").replace(/\.(py|ts|mjs|js|sh|cjs)$/i, "");
+    const prev = byBase.get(base);
+    if (DUP_NAME.test(f.name) && prev && prev.h === h) {
+      // نسخة مكررة باسم صريح ومحتوى مطابق للأساس
+      out.removed++;
+      out.freedKB += kb;
+      if (!dryRun) await fs.unlink(p).catch(() => {});
+      continue;
+    }
+    if (!prev) byBase.set(base, { name: f.name, p, h });
+    const hashOwner = hashes.get(h);
+    if (hashOwner && hashOwner !== p) {
+      // محتوى متطابق تمامًا مع ملف أقدم — تكرار حقيقي حتى لو اختلف الاسم
+      out.removed++;
+      out.freedKB += kb;
+      if (!dryRun) await fs.unlink(p).catch(() => {});
+      continue;
+    }
+    if (!hashOwner) hashes.set(h, p);
+  }
+  return out;
+}
+
 /**
  * Read the GitHub backup config at RUNTIME (no restart needed):
  *   1. process.env

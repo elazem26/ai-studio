@@ -220,7 +220,7 @@ export async function POST(req: NextRequest) {
           path: op,
           width: meta.width,
           height: meta.height,
-          size: sceneBuffer.length,
+          bytes: sceneBuffer.length,
           method,
           prompt: plan.prompt,
           size: plan.size,

@@ -4,7 +4,7 @@ import path from "path";
 import sharp from "sharp";
 import { logEvent } from "@/lib/logger";
 import { createTask, updateTask, getTask } from "@/lib/task-store";
-import { resolveFilePath } from "@/lib/security/resolve-file-path";
+import { resolveFilePath, dataRootSync } from "@/lib/security/resolve-file-path";
 import {
   describePeople,
   planScene,
@@ -55,6 +55,9 @@ const LANGS: Record<string, string> = {
   "ar-GULF": "العربية الخليجية",
   en: "English",
 };
+
+const DATA_ROOT = dataRootSync();
+const RESULTS_ROOT = path.join(DATA_ROOT, "results");
 
 function normPaths(v: unknown): string[] {
   if (!Array.isArray(v)) return [];
@@ -237,7 +240,10 @@ export async function POST(req: NextRequest) {
         { prompt: videoPrompt, image_url: sceneDataUrl },
       ];
       let lastErr: unknown = null;
-      for (const a of attempts) {
+      let retries429 = 0;
+      const MAX_429_RETRIES = 4; // انتظارات إضافية إجمالًا: 15+30+45+60 ثانية
+      for (let ai = 0; ai < attempts.length; ai++) {
+        const a = attempts[ai];
         try {
           createRes = await (zai.video.generations.create as any)(a);
           break;
@@ -245,6 +251,15 @@ export async function POST(req: NextRequest) {
           lastErr = e;
           const msg = e instanceof Error ? e.message : String(e);
           if (msg.includes("1301") || msg.includes("contentFilter")) throw e;
+          // 429 = حد معدل البوابة — انتظر ثم أعد المحاولة (وليس الانتقال لتوليفة أخرى)
+          if (retries429 < MAX_429_RETRIES && (msg.includes("429") || msg.toLowerCase().includes("too many requests") || msg.includes("请求过快"))) {
+            retries429++;
+            const wait = 15000 * retries429;
+            updateTask(taskId, { meta: { stage: "video-task", retry429: retries429, waitSec: Math.round(wait / 1000) } });
+            await sleep(wait);
+            ai--; // أعد نفس التوليفة بعد الانتظار
+            continue;
+          }
           await logEvent({ category: "video", level: "debug", message: "video create attempt failed → next", details: msg.slice(0, 200) });
         }
       }
@@ -324,7 +339,7 @@ export async function POST(req: NextRequest) {
       updateTask(taskId, { progress: 90, phase: "finalizing", meta: { stage: "package", style } });
       const [vw, vh] = videoSize.split("x").map(Number);
       const outName = `compose-video-${Date.now()}.${format}`;
-      const outPath = path.join(process.cwd(), "data/results", outName);
+      const outPath = path.join(RESULTS_ROOT, outName);
       const packed = await packageVideo({
         input: rawPath,
         out: outPath,
@@ -340,7 +355,7 @@ export async function POST(req: NextRequest) {
       if (!packed.ok) {
         // سقوط احتياطي: نسخة خام mp4 بدون تدرج
         await logEvent({ category: "video", level: "warn", message: "packageVideo failed → raw fallback", details: packed.stderr.slice(-300) });
-        const fallback = path.join(process.cwd(), "data/results", `compose-video-${Date.now()}.mp4`);
+        const fallback = path.join(RESULTS_ROOT, `compose-video-${Date.now()}.mp4`);
         await runFfmpeg(["-i", rawPath, "-c", "copy", fallback], 120_000);
         const probeF = await probeVideo(fallback);
         updateTask(taskId, {

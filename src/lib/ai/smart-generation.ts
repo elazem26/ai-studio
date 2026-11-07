@@ -27,6 +27,7 @@
 import { callLLM, getConfiguredProviders, type LLMProvider } from "@/lib/ai/free-llm";
 import { generateImageBase64 } from "@/lib/ai/pollinations";
 import { logEvent } from "@/lib/logger";
+import { dataRootSync } from "@/lib/security/resolve-file-path";
 import { promises as fs } from "fs";
 import path from "path";
 import sharp from "sharp";
@@ -36,7 +37,9 @@ import { promisify } from "util";
 const execFile = promisify(execFileCb);
 const sleepMs = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-const RESULTS_ROOT = path.resolve(process.cwd(), "data/results");
+// الإصلاح: dataRootSync الثابت بدل process.cwd() (cwd الخادم المستقل = .next/standalone
+// الذي يُمحى عند كل إعادة بناء — سبب اختفاء نتائج الفيديو بعد النشر)
+const RESULTS_ROOT = path.join(dataRootSync(), "results");
 
 // ============================================================
 // Types

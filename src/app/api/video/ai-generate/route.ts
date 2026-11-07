@@ -24,8 +24,8 @@ const STYLES: Record<string, string> = {
 
 const QUALITIES = ["speed", "quality"] as const;
 const FORMATS = ["mp4", "webm", "gif"] as const;
-const DURATIONS = [5, 10] as const;
-const FPSS = [30, 60] as const;
+const DURATIONS: number[] = [5, 10];
+const FPSS: number[] = [30, 60];
 const SIZES = ["1280x720", "1920x1080", "720x1280", "1024x1024"];
 
 /** GET — engine info, or poll a job: GET /api/video/ai-generate?jobId=... */

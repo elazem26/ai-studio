@@ -6,8 +6,11 @@
 
 import { promises as fs, statSync } from "fs";
 import path from "path";
+import { dataRootSync } from "@/lib/security/resolve-file-path";
 
-const R = path.resolve(process.cwd(), "data/results");
+// الإصلاح: dataRootSync الثابت بدل process.cwd() — cwd الخادم المستقل يشير
+// إلى .next/standalone الذي يُمحى عند كل إعادة بناء فتختفي النتائج.
+const R = path.join(dataRootSync(), "results");
 
 /**
  * Get free disk space in bytes for the partition holding `dir`.

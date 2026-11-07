@@ -87,6 +87,8 @@ export function SessionCleanup() {
       try {
         localStorage.removeItem("ai-studio-images");
         localStorage.removeItem("ai-studio-ui");
+        // متجر «إضافة محتوى إلى الصورة» — صور المصدر/المراجع/النتيجة والرسائل
+        localStorage.removeItem("content-composer-store");
       } catch {
         // ignore
       }

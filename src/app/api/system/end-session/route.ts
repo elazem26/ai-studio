@@ -5,6 +5,7 @@ import { requireAdmin } from "@/lib/auth";
 import {
   buildCleanTarball, distributeToLocations,
   cleanSessionMedia, cleanJunk, gitHygiene, buildPCPackage,
+  dedupeSessionMedia, dedupeScripts,
   readGitHubConfig, PROJECT,
 } from "@/lib/backup";
 
@@ -66,11 +67,23 @@ export async function POST(req: NextRequest) {
 
   // ---- LIGHT MODE (page unload beacon): privacy media cleanup only ----
   if (mode === "light") {
+    // 0) إزالة التكرارات أولًا (وسائط الجلسة + السكربتات المكررة) — متطلب المالك:
+    //    عند إغلاق المتصفح تُحذف الوسائط وتُزال التكرارات في الملفات والسكربت
+    try {
+      const dupMedia = await dedupeSessionMedia(dryRun);
+      const dupScripts = await dedupeScripts(dryRun);
+      steps.push({
+        step: "dedupe", ok: true,
+        details: { ...dupMedia, scriptsScanned: dupScripts.scanned, scriptsRemoved: dupScripts.removed, scriptsFreedKB: dupScripts.freedKB, dryRun },
+      });
+    } catch (e: any) {
+      steps.push({ step: "dedupe", ok: false, details: { error: e?.message } });
+    }
     try {
       const clean = await cleanSessionMedia(dryRun);
       steps.push({
         step: "clean", ok: true,
-        details: { ...clean, dryRun, note: "وضع خفيف (إغلاق صفحة): حُذفت صور الجلسة فقط — بدون git/نسخ/GitHub" },
+        details: { ...clean, dryRun, note: "وضع خفيف (إغلاق صفحة): حُذفت صور الجلسة والفيديوهات فقط — بدون git/نسخ/GitHub" },
       });
     } catch (e: any) {
       steps.push({ step: "clean", ok: false, details: { error: e?.message } });
@@ -81,9 +94,11 @@ export async function POST(req: NextRequest) {
   // ---- STEP 0: JUNK-CLEAN (duplicates + unused dirs + ALL dated backups) ---
   try {
     const junk = await cleanJunk(dryRun);
+    const dupMedia = await dedupeSessionMedia(dryRun);
+    const dupScripts = await dedupeScripts(dryRun);
     steps.push({
       step: "junk-clean", ok: true,
-      details: { ...junk, dryRun, note: dryRun ? "معاينة فقط" : "حُذفت المجلدات والملفات المكررة وكل النسخ المؤرخة (المكررة)" },
+      details: { ...junk, mediaDedup: dupMedia, scriptsDedup: { scanned: dupScripts.scanned, removed: dupScripts.removed }, dryRun, note: dryRun ? "معاينة فقط" : "حُذفت المجلدات والملفات المكررة وكل النسخ المؤرخة + تكرارات الوسائط والسكربت" },
     });
   } catch (e: any) {
     steps.push({ step: "junk-clean", ok: false, details: { error: e?.message } });

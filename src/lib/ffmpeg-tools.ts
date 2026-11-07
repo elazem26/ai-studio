@@ -10,8 +10,10 @@
 import { spawn } from "child_process";
 import { promises as fs } from "fs";
 import path from "path";
+import { dataRootSync } from "@/lib/security/resolve-file-path";
 
-export const TMP_ROOT = path.resolve(process.cwd(), "data/temp");
+/** مجلد المؤقتات الثابت (dataRootSync بدل cwd — الخادم المستقل يُمحى عند البناء) */
+export const TMP_ROOT = path.join(dataRootSync(), "temp");
 
 export function runFfmpeg(args: string[], timeoutMs = 300_000): Promise<{ ok: boolean; stderr: string }> {
   return new Promise((resolve) => {
@@ -51,6 +53,8 @@ export async function ensureTmp(): Promise<string> {
 /**
  * موجة جيبية متعددة الطبقات = وسادة هارمونية هادئة.
  * ambient: أوتار Gmaj بطيئة | upbeat: إيقاع نبضي + طبقة أعلى.
+ * التعبيرات تُقتبس بعلامات '...' لأن ffmpeg يفصل الفلاتر بفواصل —
+ * والفاصلة داخل mod(t,0.5) يجب أن تبقى حرفية.
  */
 export async function synthMusic(outWav: string, seconds: number, mood: "ambient" | "upbeat"): Promise<boolean> {
   const dur = Math.max(2, Math.min(120, seconds));
@@ -60,7 +64,7 @@ export async function synthMusic(outWav: string, seconds: number, mood: "ambient
       "(0.055*sin(2*PI*196*t)+0.05*sin(2*PI*293.66*t)+0.045*sin(2*PI*369.99*t))" +
       "*(0.75+0.25*sin(2*PI*0.12*t))*(0.7+0.3*sin(2*PI*0.05*t+1.3))";
     const r = await runFfmpeg([
-      "-f", "lavfi", "-i", `aevalsrc=${expr}:s=44100:d=${dur}`,
+      "-f", "lavfi", "-i", `aevalsrc='${expr}':s=44100:d=${dur}`,
       "-af", "lowpass=f=1200,aformat=sample_fmts=fltp:channel_layouts=stereo",
       "-c:a", "pcm_s16le", outWav,
     ], 60_000);
@@ -71,10 +75,9 @@ export async function synthMusic(outWav: string, seconds: number, mood: "ambient
   const expr =
     "(0.09*sin(2*PI*220*t)*" + beat + "+0.07*sin(2*PI*330*t)*" + beat + "+0.05*sin(2*PI*440*t)*" + beat + ")";
   const r = await runFfmpeg([
-    "-f", "lavfi", "-i", `aevalsrc=${expr}:s=44100:d=${dur}`,
+    "-f", "lavfi", "-i", `aevalsrc='${expr}':s=44100:d=${dur}`,
     "-f", "lavfi", "-i", `anoisesrc=color=pink:amplitude=0.012:duration=${dur}`,
-    "-af", "lowpass=f=4000,aformat=sample_fmts=fltp:channel_layouts=stereo",
-    "-filter_complex", "[0:a][1:a]amix=inputs=2:duration=first:weights=1 0.4[a]",
+    "-filter_complex", "[0:a][1:a]amix=inputs=2:duration=first:weights=1 0.4[m];[m]lowpass=f=4000,aformat=sample_fmts=fltp:channel_layouts=stereo[a]",
     "-map", "[a]", "-c:a", "pcm_s16le", outWav,
   ], 60_000);
   return r.ok;

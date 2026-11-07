@@ -17,8 +17,19 @@ import { promises as fs } from "fs";
 import path from "path";
 import sharp from "sharp";
 import { logEvent } from "@/lib/logger";
+import { dataRootSync } from "@/lib/security/resolve-file-path";
 
 const SWAP_SERVICE = "http://localhost:3030";
+const LAMA_SERVICE = "http://localhost:3031";
+
+/** تحرير ذاكرة LaMa (~1.2GB) قبل التبديل الثقيل / إعادة إحمائها بعده */
+async function lamaControl(action: "unload" | "warm"): Promise<void> {
+  try {
+    await fetch(`${LAMA_SERVICE}/${action}`, { method: action === "unload" ? "POST" : "GET", signal: AbortSignal.timeout(5000) });
+  } catch {
+    /* غير حرج */
+  }
+}
 
 export const COMPOSE_SIZES = ["1024x1024", "768x1344", "864x1152", "1344x768", "1152x864", "1440x720", "720x1440"] as const;
 export type ComposeSize = (typeof COMPOSE_SIZES)[number];
@@ -434,28 +445,64 @@ export interface LockReport {
   buffer: Buffer;
 }
 
+const sleepMs = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** انتظار جهوزية خدمة الوجوه (قد تكون قيد إعادة التشغيل بعد OOM) */
+async function waitForSwapService(maxWaitMs = 45_000): Promise<boolean> {
+  const t0 = Date.now();
+  while (Date.now() - t0 < maxWaitMs) {
+    try {
+      const res = await fetch(`${SWAP_SERVICE}/health`, { signal: AbortSignal.timeout(3000) });
+      if (res.ok) return true;
+    } catch {
+      /* لم تجهز بعد */
+    }
+    await sleepMs(3000);
+  }
+  return false;
+}
+
 /**
  * كشف الوجوه في الصورة المولّدة ثم تبديل كل وجه بالوجه الحقيقي للشخص المقابل.
  * الترتيب: الأشخاص يُرتّبون من اليسار لليمين حسب مواضع الوجوه المكتشفة.
- * أي فشل يعيد الصورة الأصلية مع ملاحظة (غير مسقط للخط كاملاً — الصورة المولّدة
- * تحاول أصلًا حفظ الملامح، والقفل طبقة ضمان إضافية).
+ *
+ * إدارة الذاكرة (صندوق 4GB): عملية التبديل بوضع HQ تستهلك ~2.2GB وقد
+ * يقتل النظام العملية بـ OOM — لذا نعمل على نسخة مصغرة (≤1152px) ونعيد
+ * المحاولة بعد أن يعيد الحارس تشغيل الخدمة. الفشل غير مسقط: الصورة
+ * المولّدة تحاول أصلًا حفظ الملامح والقفل طبقة ضمان إضافية.
  */
 export async function lockIdentities(opts: {
   sceneBuffer: Buffer;
   persons: { dataUrl: string; name?: string }[];
   onProgress?: (locked: number, total: number) => void;
 }): Promise<LockReport> {
-  const original = opts.sceneBuffer;
   const persons = opts.persons.filter((p) => !!p.dataUrl);
-  if (!persons.length) {
-    return { detected: 0, locked: 0, note: "لا توجد صور أشخاص لقفل الملامح", buffer: original };
+  const meta = await sharp(opts.sceneBuffer).metadata();
+  if (!persons.length || !meta.width) {
+    return { detected: 0, locked: 0, note: "لا توجد صور أشخاص لقفل الملامح", buffer: opts.sceneBuffer };
   }
+  if (!(await waitForSwapService())) {
+    return { detected: 0, locked: 0, note: "خدمة الوجوه غير متاحة حاليًا — الصورة معروضة كما وُلّدت (المحرك يحافظ على الملامح أصلًا)", buffer: opts.sceneBuffer };
+  }
+
+  // تنسيق الذاكرة: تفريغ LaMa قبل التبديل (يحمي من OOM) — يعود للتحميل الكسول لاحقًا
+  await lamaControl("unload");
+
+  // نسخة عمل مصغرة لتخفيف الذاكرة (التبديل بوضع HQ يصل 2.2GB على الصور الكبيرة)
+  const needDownscale = Math.max(meta.width, meta.height) > 1152;
+  const workBuffer = needDownscale
+    ? await sharp(opts.sceneBuffer)
+        .resize({ width: 1152, height: 1152, fit: "inside" })
+        .png()
+        .toBuffer()
+    : opts.sceneBuffer;
+  let current = `data:image/png;base64,${workBuffer.toString("base64")}`;
+
   try {
-    const dataUrl = `data:image/png;base64,${original.toString("base64")}`;
-    const det = await swapServiceFetch("/detect", { image: dataUrl }, 60_000);
+    const det = await swapServiceFetch("/detect", { image: current }, 90_000);
     const faces: any[] = Array.isArray(det?.faces) ? det.faces : [];
     if (!faces.length) {
-      return { detected: 0, locked: 0, note: "لم تُكتشف وجوه في النتيجة — تم عرض الصورة كما وُلّدت", buffer: original };
+      return { detected: 0, locked: 0, note: "لم تُكتشف وجوه في النتيجة — تم عرض الصورة كما وُلّدت", buffer: opts.sceneBuffer };
     }
 
     // ترتيب الوجوه من اليسار لليمين (bboxPx = [x1,y1,x2,y2])
@@ -468,38 +515,52 @@ export async function lockIdentities(opts: {
       .sort((a, b) => a.cx - b.cx);
 
     const count = Math.min(ordered.length, persons.length);
-    let current = dataUrl;
     let locked = 0;
     for (let i = 0; i < count; i++) {
-      const faceIdx = ordered[i].index;
-      try {
-        const r = await swapServiceFetch("/swap", { source: current, face: persons[i].dataUrl, sourceIndex: faceIdx });
-        const out = String(r?.result ?? "");
-        if (out.startsWith("data:image")) {
-          current = out;
-          locked++;
-          opts.onProgress?.(locked, count);
+      let done = false;
+      for (let attempt = 0; attempt < 2 && !done; attempt++) {
+        try {
+          const r = await swapServiceFetch("/swap", { source: current, face: persons[i].dataUrl, sourceIndex: ordered[i].index });
+          const out = String(r?.result ?? "");
+          if (out.startsWith("data:image")) {
+            current = out;
+            locked++;
+            done = true;
+            opts.onProgress?.(locked, count);
+          }
+        } catch (e) {
+          await logEvent({
+            category: "tryon",
+            level: "debug",
+            message: `identity-lock face ${i} attempt ${attempt + 1} failed`,
+            details: e instanceof Error ? e.message : String(e),
+          });
+          if (attempt === 0) {
+            // غالبًا OOM قتل الخدمة — ننتظر إحياء الحارس ثم نكمل من آخر صورة محفوظة
+            await waitForSwapService(60_000);
+          }
         }
-      } catch (e) {
-        await logEvent({
-          category: "tryon",
-          level: "debug",
-          message: `identity-lock face ${i} failed (continuing)`,
-          details: e instanceof Error ? e.message : String(e),
-        });
       }
     }
     const note =
       locked === 0
-        ? "تعذر قفل الملامح تلقائيًا — الصورة معروضة كما وُلّدت (المحرك يحافظ على الملامح أصلًا)"
+        ? "تعذر قفل الملامح تلقائيًا (خدمة الوجوه مشغولة بالذاكرة) — الصورة معروضة كما وُلّدت والمحرك يحافظ على الملامح أصلًا"
         : locked < count
           ? `تم قفل ${locked} من ${count} وجوه بالملامح الحقيقية`
           : `تم قفل جميع الوجوه (${locked}) بالملامح الحقيقية`;
-    const buffer = locked > 0 ? Buffer.from(current.slice(current.indexOf(",") + 1), "base64") : original;
+    const buffer =
+      locked > 0
+        ? await sharp(Buffer.from(current.slice(current.indexOf(",") + 1), "base64"))
+            .png()
+            .toBuffer()
+        : opts.sceneBuffer;
     return { detected: faces.length, locked, note, buffer };
   } catch (e) {
     await logEvent({ category: "tryon", level: "debug", message: "identity-lock skipped", details: e instanceof Error ? e.message : String(e) });
-    return { detected: 0, locked: 0, note: "قفل الملامح غير متاح حاليًا (خدمة الوجوه مشغولة) — الصورة معروضة كما وُلّدت", buffer: original };
+    return { detected: 0, locked: 0, note: "قفل الملامح غير متاح حاليًا (خدمة الوجوه مشغولة) — الصورة معروضة كما وُلّدت", buffer: opts.sceneBuffer };
+  } finally {
+    // إعادة إحماء LaMa ليعود مزيل الكائنات جاهزًا (تحميل كسول في الخلفية)
+    await lamaControl("warm");
   }
 }
 
@@ -519,9 +580,10 @@ export async function enhanceImageBuffer(buf: Buffer): Promise<Buffer> {
     .toBuffer();
 }
 
-/** حفظ نتيجة في data/results ولمس ملف تعريف (يُنظف تلقائيًا عند نهاية الجلسة) */
+/** حفظ نتيجة في data/results — عبر dataRootSync الثابت (cwd الخادم المستقل
+ *  يشير إلى .next/standalone الذي يُمحى عند كل بناء — لهذا تختفي النتائج) */
 export async function saveResult(buffer: Buffer, prefix: string, ext = "png"): Promise<string> {
-  const resultsRoot = path.resolve(process.cwd(), "data/results");
+  const resultsRoot = path.join(dataRootSync(), "results");
   await fs.mkdir(resultsRoot, { recursive: true });
   const name = `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
   await fs.writeFile(path.join(resultsRoot, name), buffer);

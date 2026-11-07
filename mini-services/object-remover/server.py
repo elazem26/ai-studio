@@ -275,6 +275,21 @@ def warm():
     return {"ok": True, "warming": True}
 
 
+@app.post("/unload")
+def unload():
+    """تحرير ذاكرة نموذج LaMa (~1.2GB) — يُستخدم من وكيل الدمج قبل عمليات
+    تبديل الوجوه الثقيلة لتفادي OOM على صندوق 4GB. النموذج يعود للتحميل
+    الكسول تلقائيًا عند أول طلب /inpaint (أو عبر /warm)، فلا توجد مخاطرة."""
+    try:
+        _state["session"] = None
+        _state["status"] = "lazy"
+        import gc as _gc
+        _gc.collect()
+        return {"ok": True, "status": "lazy", "unloaded": True}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
 @app.post("/inpaint")
 async def inpaint_endpoint(req: Request):
     t0 = time.time()

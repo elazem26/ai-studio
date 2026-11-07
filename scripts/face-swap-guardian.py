@@ -118,6 +118,13 @@ def restart_face_swap(reason: str) -> None:
     save_state("face-swap", "restart")
 
 
+def restart_object_remover(reason: str) -> None:
+    script = os.path.join(PROJECT, "mini-services", "object-remover", "server.py")
+    log(f"[object-remover] down ({reason}) — spawning server.py")
+    spawn_detached([PYTHON, script], log_path="/tmp/object-remover.log")
+    save_state("object-remover", "restart")
+
+
 def restart_web(reason: str) -> None:
     script = os.path.join(PROJECT, "scripts", "start-production.sh")
     if not os.path.exists(script):
@@ -149,9 +156,9 @@ def main() -> None:
         log("another guardian holds the lock — exiting")
         sys.exit(0)
 
-    log(f"guardian v2 started (pid {os.getpid()}, lock={'flock' if lock > 0 else 'unlocked-fallback'}) — watching :3000 and :3030 every {CHECK_INTERVAL}s")
+    log(f"guardian v3 started (pid {os.getpid()}, lock={'flock' if lock > 0 else 'unlocked-fallback'}) — watching :3000, :3030 and :3031 every {CHECK_INTERVAL}s")
 
-    last_restart = {"web": 0.0, "face-swap": 0.0}
+    last_restart = {"web": 0.0, "face-swap": 0.0, "object-remover": 0.0}
 
     while True:
         try:
@@ -174,6 +181,15 @@ def main() -> None:
                     wait_for_port(3030, 90, "face-swap")
             else:
                 last_restart["face-swap"] = 0.0
+
+            # ---- 3. object-remover micro-service (LaMa inpainting) ----
+            if not port_open(3031):
+                if now - last_restart["object-remover"] >= RESTART_COOLDOWN:
+                    last_restart["object-remover"] = now
+                    restart_object_remover("port 3031 closed")
+                    wait_for_port(3031, 90, "object-remover")
+            else:
+                last_restart["object-remover"] = 0.0
 
         except Exception as e:  # never die
             try:
